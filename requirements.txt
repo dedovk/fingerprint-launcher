@@ -1,0 +1,6 @@
+pywin32
+PyQt6
+qtawesome
+pytest
+poetry
+loguru

@@ -1,0 +1,142 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "fingerprint-launcher"
+version = "1.0.0"
+description = "Windows fingerprint action launcher using the Windows Biometric Framework."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "Proprietary" }
+authors = [
+    { name = "Diedov Kyrylo" },
+]
+keywords = [
+    "windows",
+    "fingerprint",
+    "biometric",
+    "winbio",
+    "windows-hello",
+    "launcher",
+    "automation",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: Microsoft :: Windows :: Windows 10",
+    "Operating System :: Microsoft :: Windows :: Windows 11",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Desktop Environment",
+    "Topic :: Security",
+    "Topic :: System :: Hardware",
+]
+
+# Runtime dependencies. Pinned to known-good lower bounds; upper bounds avoid
+# accidental major upgrades that break the Windows-specific code paths.
+dependencies = [
+    "PyQt6>=6.6,<7",
+    "loguru>=0.7,<1",
+    "keyboard>=0.13.5,<1",
+]
+
+
+[project.optional-dependencies]
+# Install with: pip install -e ".[dev]"
+dev = [
+    "pytest>=8,<9",
+    "pytest-mock>=3.12,<4",
+]
+
+# Install with: pip install -e ".[build]"
+# Used only by build.py to produce the offline Nuitka onefile binaries.
+build = [
+    "nuitka>=2.4",
+    "zstandard>=0.22",
+    "ordered-set>=4.1",
+]
+
+
+[project.urls]
+Homepage = "https://github.com/dedov-kyrylo/fingerprint-launcher"
+Repository = "https://github.com/dedov-kyrylo/fingerprint-launcher"
+Issues = "https://github.com/dedov-kyrylo/fingerprint-launcher/issues"
+
+
+# Console scripts let the package be launched as `fingerprint-launcher`
+# once installed via pip. Useful when shipping as a wheel; the Nuitka build
+# path still uses main.py.
+[project.scripts]
+fingerprint-launcher = "main:main"
+
+[project.gui-scripts]
+fingerprint-launcher-gui = "main:main"
+
+
+# ---------------------------------------------------------------------------
+# setuptools: package discovery
+# ---------------------------------------------------------------------------
+[tool.setuptools]
+# This is a multi-package project (core, services, ui) rather than a single
+# importable package, so we list them explicitly.
+packages = ["core", "services", "ui"]
+py-modules = ["main", "build", "check_wbf"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+"*" = ["assets/*.ico", "assets/*.png"]
+
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+]
+# Keep the pytest cache outside the project tree. Avoids the "Permission
+# denied on .pytest_cache" issue that happens when pytest is run once under
+# admin (e.g. after `python main.py` elevated) and then again as a normal user.
+cache_dir = "~/.cache/fingerprint-launcher/pytest"
+filterwarnings = [
+    "error",
+    # PyQt6 + Python 3.13 emit a DeprecationWarning on SIP-based imports that
+    # we cannot fix from our side; downgrade to warning so tests still run.
+    "default::DeprecationWarning",
+]
+markers = [
+    "windows: tests that require Windows-specific behavior",
+]
+
+
+# ---------------------------------------------------------------------------
+# coverage (used if you ever add pytest-cov)
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+branch = true
+source = ["core", "services", "ui"]
+omit = [
+    "tests/*",
+    "build.py",
+    "check_wbf.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if sys.platform != .win32.:",
+]
+show_missing = true
+skip_covered = true

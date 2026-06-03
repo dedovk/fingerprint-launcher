@@ -22,3 +22,17 @@ def test_unknown_command_type_raises():
     with pytest.raises(CommandExecutionError):
         execute_command({"command_type": "nope", "command_data": {}})
 
+
+def test_shell_uses_powershell_on_windows(monkeypatch):
+    monkeypatch.setattr("sys.platform", "win32")
+    with patch("subprocess.Popen") as popen:
+        execute_command({"command_type": "shell", "command_data": {"cmd": "Write-Output test"}})
+
+    popen.assert_called_once()
+    assert popen.call_args.args[0] == [
+        "powershell.exe",
+        "-NoProfile",
+        "-Command",
+        "Write-Output test",
+    ]
+    assert "creationflags" in popen.call_args.kwargs

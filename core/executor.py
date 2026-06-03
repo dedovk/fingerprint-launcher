@@ -51,13 +51,13 @@ def execute_command(command: dict[str, Any]) -> None:
     elif command_type == "lock_screen":
         _lock_screen()
     else:
-        raise CommandExecutionError(f"Невідомий тип команди: {command_type}")
+        raise CommandExecutionError(f"Unknown command type: {command_type}")
 
 
 def _launch_app(data: dict[str, Any]) -> None:
     path = str(data.get("path") or "").strip()
     if not path:
-        raise CommandExecutionError("launch_app потребує path")
+        raise CommandExecutionError("launch_app requires path")
 
     args = data.get("args") or ""
     if sys.platform == "win32" and not args:
@@ -73,14 +73,14 @@ def _launch_app(data: dict[str, Any]) -> None:
 def _open_url(data: dict[str, Any]) -> None:
     url = str(data.get("url") or "").strip()
     if not url:
-        raise CommandExecutionError("open_url потребує url")
+        raise CommandExecutionError("open_url requires url")
     webbrowser.open(url)
 
 
 def _hotkey(data: dict[str, Any]) -> None:
     keys = str(data.get("keys") or "").strip()
     if not keys:
-        raise CommandExecutionError("hotkey потребує keys")
+        raise CommandExecutionError("hotkey requires keys")
     keys = _normalize_hotkey(keys)
     import keyboard
 
@@ -90,12 +90,12 @@ def _hotkey(data: dict[str, Any]) -> None:
 def _shell(data: dict[str, Any]) -> None:
     cmd = str(data.get("cmd") or "").strip()
     if not cmd:
-        raise CommandExecutionError("shell потребує cmd")
+        raise CommandExecutionError("shell requires cmd")
 
     hidden = bool(data.get("hidden", True))
     if sys.platform == "win32":
         flags = CREATE_NO_WINDOW if hidden else 0
-        subprocess.Popen(["powershell", "-NoProfile", "-Command", cmd], creationflags=flags)
+        subprocess.Popen(["powershell.exe", "-NoProfile", "-Command", cmd], creationflags=flags)
         return
 
     # Non-Windows fallback for tests/dev only. No shell=True here either.
@@ -104,5 +104,5 @@ def _shell(data: dict[str, Any]) -> None:
 
 def _lock_screen() -> None:
     if sys.platform != "win32":
-        raise CommandExecutionError("lock_screen доступний лише на Windows")
+        raise CommandExecutionError("lock_screen is only available on Windows")
     ctypes.windll.user32.LockWorkStation()

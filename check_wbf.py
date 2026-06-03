@@ -25,7 +25,9 @@ ATTEMPT_TIMEOUT_MS = OVERALL_TIMEOUT_SECONDS * 1000
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Console WinBio identify smoke test")
+    parser = argparse.ArgumentParser(
+        description="Console smoke test for Windows Biometric Framework identification"
+    )
     parser.add_argument(
         "--blocking",
         action="store_true",
@@ -46,28 +48,37 @@ def main() -> int:
 
     if args.blocking:
         focus = ensure_console_foreground()
-        print(f"Focus: {focus.message} (console=0x{focus.console_hwnd:x}, foreground=0x{focus.foreground_hwnd:x})")
-        print("Blocking mode: прикладіть палець. Ctrl+C щоб зупинити.")
+        print(
+            f"Focus: {focus.message} "
+            f"(console=0x{focus.console_hwnd:x}, foreground=0x{focus.foreground_hwnd:x})"
+        )
+        print("Blocking mode: touch the fingerprint sensor. Press Ctrl+C to stop.")
         with WinBioSession(WINBIO_POOL_SYSTEM) as session:
             result = session.identify(timeout_ms=None)
         return print_result(result)
 
     focus = ensure_console_foreground()
-    print(f"Focus: {focus.message} (console=0x{focus.console_hwnd:x}, foreground=0x{focus.foreground_hwnd:x})")
+    print(
+        f"Focus: {focus.message} "
+        f"(console=0x{focus.console_hwnd:x}, foreground=0x{focus.foreground_hwnd:x})"
+    )
     if not focus.ok:
-        print("Увага: без foreground Win32-вікна WBF system pool може не почати capture.")
+        print(
+            "Warning: without a foreground Win32 window, the WBF system pool "
+            "may not start capture."
+        )
 
     deadline = time.monotonic() + OVERALL_TIMEOUT_SECONDS
     attempt = 1
     last_result = None
 
-    print(f"Прикладіть палець до сканера протягом {OVERALL_TIMEOUT_SECONDS} секунд...")
+    print(f"Touch the fingerprint sensor within {OVERALL_TIMEOUT_SECONDS} seconds...")
     while time.monotonic() < deadline:
         with WinBioSession(WINBIO_POOL_SYSTEM) as session:
             result = session.identify(timeout_ms=ATTEMPT_TIMEOUT_MS)
 
         if result is None:
-            print("Timeout: WinBioIdentify не повернув результат за відведений час")
+            print("Timeout: WinBioIdentify did not return a result within the allotted time")
             attempt += 1
             break
 
@@ -78,7 +89,7 @@ def main() -> int:
         message = hresult_message(result.hr)
         detail = reject_detail_message(result.reject_detail)
         print(
-            f"Спроба {attempt}: {format_hresult(result.hr)} ({message}); "
+            f"Attempt {attempt}: {format_hresult(result.hr)} ({message}); "
             f"reject_detail={result.reject_detail} ({detail})"
         )
 
@@ -86,7 +97,7 @@ def main() -> int:
             break
 
         if is_transient_identify_error(result.hr):
-            print("Це transient-помилка драйвера/сенсора, повторюю зчитування...")
+            print("Transient driver or sensor error detected; retrying capture...")
             time.sleep(0.35)
             attempt += 1
             continue
@@ -95,7 +106,7 @@ def main() -> int:
 
     result = last_result
     if result is None:
-        print("Timeout: палець не зчитано")
+        print("Timeout: no finger was read")
         return 1
 
     return print_result(result)
@@ -127,7 +138,7 @@ def print_diagnostics() -> None:
     print("=== WBF biometric units ===")
     units = enumerate_biometric_units()
     if not units:
-        print("Сенсори не знайдені через WinBioEnumBiometricUnits")
+        print("No biometric sensors were found by WinBioEnumBiometricUnits")
         return
 
     for unit in units:

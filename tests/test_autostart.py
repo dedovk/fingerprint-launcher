@@ -1,0 +1,116 @@
+import sys
+from types import SimpleNamespace
+
+from services import autostart
+
+
+def test_setup_user_autostart_creates_run_value_and_removes_legacy_task(monkeypatch):
+    calls = []
+    registry_values = {}
+
+    monkeypatch.setattr(autostart.sys, "platform", "win32")
+    monkeypatch.setattr(autostart, "_gui_launch_command", lambda exe_path=None: '"C:\\App\\FingerprintLauncher.exe"')
+    monkeypatch.setattr(autostart, "_creation_no_window", lambda: 123)
+
+    def fake_run(args, check=False, creationflags=0):
+        calls.append((args, check, creationflags))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(autostart.subprocess, "run", fake_run)
+
+    class FakeKey:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+    class FakeWinReg:
+        HKEY_CURRENT_USER = object()
+        REG_SZ = object()
+
+        @staticmethod
+        def CreateKey(root, path):
+            registry_values["create"] = (root, path)
+            return FakeKey()
+
+        @staticmethod
+        def SetValueEx(key, name, reserved, value_type, value):
+            registry_values["set"] = (key, name, reserved, value_type, value)
+
+    monkeypatch.setitem(sys.modules, "winreg", FakeWinReg)
+
+    autostart.setup_user_autostart()
+
+    assert calls == [
+        (
+            [
+                "schtasks.exe",
+                "/Delete",
+                "/TN",
+                autostart.TASK_NAME,
+                "/F",
+            ],
+            False,
+            123,
+        )
+    ]
+    assert registry_values["create"] == (FakeWinReg.HKEY_CURRENT_USER, autostart.RUN_KEY)
+    assert registry_values["set"] == (
+        registry_values["set"][0],
+        autostart.RUN_VALUE,
+        0,
+        FakeWinReg.REG_SZ,
+        '"C:\\App\\FingerprintLauncher.exe"',
+    )
+
+
+def test_remove_user_autostart_deletes_task_and_ignores_missing_run_value(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(autostart.sys, "platform", "win32")
+    monkeypatch.setattr(autostart, "_creation_no_window", lambda: 55)
+
+    def fake_run(args, check=False, creationflags=0):
+        calls.append((args, check, creationflags))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(autostart.subprocess, "run", fake_run)
+
+    class FakeWinReg:
+        HKEY_CURRENT_USER = object()
+        KEY_SET_VALUE = object()
+
+        @staticmethod
+        def OpenKey(*_args, **_kwargs):
+            raise FileNotFoundError
+
+    monkeypatch.setitem(sys.modules, "winreg", FakeWinReg)
+
+    autostart.remove_user_autostart()
+
+    assert calls == [
+        (
+            ["schtasks.exe", "/Delete", "/TN", autostart.TASK_NAME, "/F"],
+            False,
+            55,
+        )
+    ]
+
+
+def test_gui_launch_command_points_to_main_script_when_not_frozen(monkeypatch):
+    monkeypatch.setattr(autostart, "_is_frozen", lambda: False)
+    monkeypatch.setattr(autostart.sys, "executable", r"C:\Python\python.exe")
+
+    command = autostart._gui_launch_command()
+    assert "main.py" in command
+    assert "python.exe" in command
+
+
+def test_gui_launch_command_uses_executable_in_frozen_build(monkeypatch):
+    monkeypatch.setattr(autostart, "_is_frozen", lambda: True)
+    monkeypatch.setattr(autostart.sys, "executable", r"C:\App\FingerprintLauncher.exe")
+
+    command = autostart._gui_launch_command()
+    assert command == r"C:\App\FingerprintLauncher.exe"
+    assert "main.py" not in command

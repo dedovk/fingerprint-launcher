@@ -10,6 +10,7 @@ from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 from core.database import Database
 from core.executor import execute_command
 from core.winbio import (
+    E_ACCESSDENIED,
     S_OK,
     TRANSIENT_IDENTIFY_HRESULTS,
     WINBIO_E_NO_MATCH,
@@ -17,6 +18,7 @@ from core.winbio import (
     WINBIO_POOL_PRIVATE,
     WINBIO_POOL_SYSTEM,
     WinBioSession,
+    WinBioError,
     acquire_focus,
     enumerate_biometric_units,
     format_hresult,
@@ -48,6 +50,13 @@ class TriggeredFingerprintScan(QObject):
         try:
             try:
                 acquire_focus()
+            except WinBioError as exc:
+                if exc.hr == E_ACCESSDENIED:
+                    logger.debug(
+                        f"WinBioAcquireFocus denied for triggered scan: {exc}")
+                else:
+                    logger.warning(
+                        f"WinBioAcquireFocus failed for triggered scan: {exc}")
             except Exception as exc:
                 logger.warning(
                     f"WinBioAcquireFocus failed for triggered scan: {exc}")

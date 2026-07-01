@@ -700,4 +700,3 @@ if __name__ == "__main__":
                 f"hr={format_hresult(result.hr)} guid={result.guid} "
                 f"sub_factor={result.sub_factor} finger={result.finger_name}"
             )
-

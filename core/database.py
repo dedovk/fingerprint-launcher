@@ -34,8 +34,7 @@ class Database:
                 sub_factor INTEGER NOT NULL,
                 label      TEXT NOT NULL,
                 created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now')),
-                UNIQUE(sub_factor)
+                updated_at TEXT DEFAULT (datetime('now'))
             );
 
             CREATE TABLE IF NOT EXISTS commands (
@@ -70,6 +69,54 @@ class Database:
         self._conn.execute(
             "UPDATE fingers SET identity_value=guid WHERE identity_value IS NULL OR identity_value=''"
         )
+        if self._has_unique_sub_factor_constraint():
+            self._rebuild_fingers_without_unique_sub_factor()
+
+    def _has_unique_sub_factor_constraint(self) -> bool:
+        indexes = self._conn.execute("PRAGMA index_list(fingers)").fetchall()
+        for index in indexes:
+            if not index["unique"]:
+                continue
+            columns = self._conn.execute(
+                f"PRAGMA index_info({index['name']})"
+            ).fetchall()
+            if [column["name"] for column in columns] == ["sub_factor"]:
+                return True
+        return False
+
+    def _rebuild_fingers_without_unique_sub_factor(self) -> None:
+        self._conn.commit()
+        self._conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            self._conn.executescript(
+                """
+                CREATE TABLE fingers_new (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guid       TEXT NOT NULL,
+                    identity_type INTEGER DEFAULT 2,
+                    identity_value TEXT,
+                    sub_factor INTEGER NOT NULL,
+                    label      TEXT NOT NULL,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    updated_at TEXT DEFAULT (datetime('now'))
+                );
+
+                INSERT INTO fingers_new (
+                    id, guid, identity_type, identity_value, sub_factor,
+                    label, created_at, updated_at
+                )
+                SELECT
+                    id, guid, identity_type, identity_value, sub_factor,
+                    label, created_at, updated_at
+                FROM fingers;
+
+                DROP TABLE fingers;
+                ALTER TABLE fingers_new RENAME TO fingers;
+                """
+            )
+            self._conn.commit()
+        finally:
+            self._conn.execute("PRAGMA foreign_keys = ON")
 
     def get_command(
         self,
@@ -149,27 +196,31 @@ class Database:
         label: str,
         identity_type: int = WINBIO_ID_TYPE_GUID,
         identity_value: str | None = None,
+        finger_id: int | None = None,
     ) -> int:
         stored_identity = identity_value or guid
-        self._conn.execute(
+        if finger_id is not None:
+            self._conn.execute(
+                """
+                UPDATE fingers
+                SET guid = ?, identity_type = ?, identity_value = ?,
+                    sub_factor = ?, label = ?, updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                (guid, identity_type, stored_identity, sub_factor, label, finger_id),
+            )
+            self._conn.commit()
+            return int(finger_id)
+
+        cur = self._conn.execute(
             """
             INSERT INTO fingers (guid, identity_type, identity_value, sub_factor, label)
             VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(sub_factor) DO UPDATE SET
-                guid = excluded.guid,
-                identity_type = excluded.identity_type,
-                identity_value = excluded.identity_value,
-                label = excluded.label,
-                updated_at = datetime('now')
             """,
             (guid, identity_type, stored_identity, sub_factor, label),
         )
         self._conn.commit()
-        row = self._conn.execute(
-            "SELECT id FROM fingers WHERE sub_factor = ?",
-            (sub_factor,),
-        ).fetchone()
-        return int(row["id"])
+        return int(cur.lastrowid)
 
     def save_command(
         self,
@@ -190,6 +241,75 @@ class Database:
         )
         self._conn.commit()
         return int(cur.lastrowid)
+
+    def replace_commands(self, finger_id: int, commands: list[dict[str, Any]]) -> None:
+        """Replace all commands for a finger with the provided command list."""
+        normalized_commands = [
+            command
+            for command in (self._normalize_command(command) for command in commands)
+            if command is not None
+        ]
+
+        with self._conn:
+            self._conn.execute("DELETE FROM commands WHERE finger_id = ?", (finger_id,))
+            self._conn.executemany(
+                """
+                INSERT INTO commands (finger_id, command_type, command_data, enabled)
+                VALUES (?, ?, ?, ?)
+                """,
+                [
+                    (
+                        finger_id,
+                        command["command_type"],
+                        json.dumps(command["command_data"]),
+                        int(command.get("enabled", True)),
+                    )
+                    for command in normalized_commands
+                ],
+            )
+
+    def get_commands_by_finger_id(self, finger_id: int) -> list[dict[str, Any]]:
+        """Return all commands attached to one finger row, including disabled ones."""
+        rows = self._conn.execute(
+            """
+            SELECT id, finger_id, command_type, command_data, enabled
+            FROM commands
+            WHERE finger_id = ?
+            ORDER BY id ASC
+            """,
+            (finger_id,),
+        ).fetchall()
+
+        result = []
+        for row in rows:
+            data = dict(row)
+            data["command_data"] = json.loads(data["command_data"])
+            result.append(data)
+        return result
+
+    def _normalize_command(self, command: dict[str, Any]) -> dict[str, Any] | None:
+        command_type = command.get("command_type") or command.get("type")
+        if not command_type:
+            return None
+
+        command_data = command.get("command_data")
+        if command_data is None:
+            command_data = command.get("data")
+        if command_data is None:
+            command_data = {}
+        elif isinstance(command_data, str):
+            try:
+                command_data = json.loads(command_data)
+            except json.JSONDecodeError:
+                command_data = {}
+        elif not isinstance(command_data, dict):
+            command_data = {}
+
+        return {
+            "command_type": str(command_type),
+            "command_data": command_data,
+            "enabled": bool(command.get("enabled", True)),
+        }
 
     def set_command_enabled(self, command_id: int, enabled: bool) -> None:
         self._conn.execute(

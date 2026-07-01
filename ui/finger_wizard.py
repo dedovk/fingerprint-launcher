@@ -283,6 +283,7 @@ class FingerWizard(QDialog):
         self.existing = existing
         self.scanned = False
         self.actions = []
+        self.editing_action_index: int | None = None
         self.result_guid = ""
         self.result_identity_type = WINBIO_ID_TYPE_GUID
         self.result_identity_value = ""
@@ -503,6 +504,8 @@ class FingerWizard(QDialog):
         self._sync_nav()
 
     def prev_step(self) -> None:
+        if self.existing and self.stack.currentIndex() == 1:
+            return
         self.stack.setCurrentIndex(max(0, self.stack.currentIndex() - 1))
         self._sync_nav()
 
@@ -516,10 +519,16 @@ class FingerWizard(QDialog):
             value = self.action_value.text().strip()
         if not value and action != "lock_screen":
             return
-        self.actions.append({
+        action_info = {
             "command_type": action,
             "command_data": self._command_data(action, value),
-        })
+        }
+        if self.editing_action_index is None:
+            self.actions.append(action_info)
+        else:
+            self.actions[self.editing_action_index] = action_info
+            self.editing_action_index = None
+            self.add_action_btn.setText(tr(self.lang, "add_action"))
         self.action_value.clear()
         self.hotkey_value.clear()
         self._update_actions_display()
@@ -527,7 +536,42 @@ class FingerWizard(QDialog):
     def _delete_action(self, index: int) -> None:
         if 0 <= index < len(self.actions):
             self.actions.pop(index)
+            if self.editing_action_index == index:
+                self.editing_action_index = None
+                self.action_value.clear()
+                self.hotkey_value.clear()
+                self.add_action_btn.setText(tr(self.lang, "add_action"))
+            elif self.editing_action_index is not None and self.editing_action_index > index:
+                self.editing_action_index -= 1
             self._update_actions_display()
+
+    def _edit_action(self, index: int) -> None:
+        if not 0 <= index < len(self.actions):
+            return
+
+        self.editing_action_index = index
+        action_info = self.actions[index]
+        command_type = action_info["command_type"]
+        combo_index = self.action_type.findData(command_type)
+        if combo_index >= 0:
+            self.action_type.setCurrentIndex(combo_index)
+        self._sync_action_fields()
+
+        data = action_info.get("command_data") or {}
+        value = (
+            data.get("path")
+            or data.get("url")
+            or data.get("keys")
+            or data.get("cmd")
+            or ""
+        )
+        if command_type == "hotkey":
+            self.hotkey_value.setText(str(value))
+            self.hotkey_value.setFocus()
+        else:
+            self.action_value.setText(str(value))
+            self.action_value.setFocus()
+        self.add_action_btn.setText("Update action")
 
     def _update_actions_display(self) -> None:
         while self.actions_layout.count():
@@ -559,13 +603,21 @@ class FingerWizard(QDialog):
 
         label_text = f"{index + 1}. {labels.get(cmd_type, cmd_type)}"
         type_label = QLabel(label_text)
-        type_label.setStyleSheet("font-weight: 600; min-width: 100px;")
+        type_label.setMinimumWidth(120)
+        type_label.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Preferred)
+        type_label.setStyleSheet("font-weight: 600;")
 
         value_label = QLabel(summary)
         value_label.setWordWrap(True)
-        value_label.setStyleSheet("color: #666; flex: 1;")
+        value_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        value_label.setStyleSheet("color: #666;")
 
-        delete_btn = QPushButton("✕")
+        edit_btn = QPushButton(tr(self.lang, "edit"))
+        edit_btn.setMinimumWidth(max(72, edit_btn.sizeHint().width()))
+        edit_btn.setMinimumHeight(28)
+        edit_btn.clicked.connect(lambda: self._edit_action(index))
+
+        delete_btn = QPushButton("X")
         delete_btn.setMaximumWidth(32)
         delete_btn.setMinimumHeight(28)
         delete_btn.setStyleSheet(
@@ -574,6 +626,7 @@ class FingerWizard(QDialog):
 
         row_layout.addWidget(type_label)
         row_layout.addWidget(value_label, 1)
+        row_layout.addWidget(edit_btn)
         row_layout.addWidget(delete_btn)
 
         self.actions_layout.addWidget(row)
@@ -587,14 +640,9 @@ class FingerWizard(QDialog):
             label,
             identity_type=self.result_identity_type,
             identity_value=self.result_identity_value,
+            finger_id=int(self.existing["id"]) if self.existing else None,
         )
-        for action_info in self.actions:
-            self.db.save_command(
-                finger_id,
-                action_info["command_type"],
-                action_info["command_data"],
-                enabled=True
-            )
+        self.db.replace_commands(finger_id, self.actions)
         labels = action_labels(self.lang)
         action_names = ", ".join(labels.get(
             a["command_type"], a["command_type"]) for a in self.actions)
@@ -611,16 +659,15 @@ class FingerWizard(QDialog):
         self.result_sub_factor = int(finger["sub_factor"])
         self.label_input.setText(finger.get("label", ""))
 
-        # Load all commands for this finger
-        all_fingers = self.db.list_fingers()
-        for f in all_fingers:
-            if f.get("id") == finger.get("id") and f.get("command_type"):
-                self.actions.append({
-                    "command_type": f["command_type"],
-                    "command_data": f.get("command_data") or {},
-                })
+        for command in self.db.get_commands_by_finger_id(int(finger["id"])):
+            self.actions.append({
+                "command_type": command["command_type"],
+                "command_data": command.get("command_data") or {},
+                "enabled": command.get("enabled", True),
+            })
         self.stack.setCurrentIndex(1)
         self._sync_action_fields()
+        self._update_actions_display()
 
     def _selected_action(self) -> str:
         return str(self.action_type.currentData())
@@ -650,7 +697,10 @@ class FingerWizard(QDialog):
             self.action_value_stack.setCurrentIndex(0)
 
     def _sync_nav(self) -> None:
-        self.back_btn.setEnabled(self.stack.currentIndex() > 0)
+        self.back_btn.setEnabled(
+            self.stack.currentIndex() > 0
+            and not (self.existing and self.stack.currentIndex() == 1)
+        )
         self.next_btn.setEnabled(
             self.stack.currentIndex() != 0 or self.scanned)
         self.next_btn.setText(tr(self.lang, "done") if self.stack.currentIndex(

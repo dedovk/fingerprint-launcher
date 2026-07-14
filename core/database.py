@@ -7,6 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from core.action_registry import normalize_command_data
 from core.winbio import WINBIO_ID_TYPE_GUID
 
 
@@ -71,6 +72,33 @@ class Database:
         )
         if self._has_unique_sub_factor_constraint():
             self._rebuild_fingers_without_unique_sub_factor()
+        self._migrate_command_data()
+
+    def _migrate_command_data(self) -> None:
+        rows = self._conn.execute(
+            "SELECT id, command_type, command_data FROM commands"
+        ).fetchall()
+        for row in rows:
+            raw_data = row["command_data"]
+            try:
+                decoded = json.loads(raw_data)
+            except (json.JSONDecodeError, TypeError):
+                decoded = {}
+            normalized = normalize_command_data(row["command_type"], decoded)
+            encoded = json.dumps(normalized)
+            if encoded != raw_data:
+                self._conn.execute(
+                    "UPDATE commands SET command_data = ? WHERE id = ?",
+                    (encoded, row["id"]),
+                )
+
+    @staticmethod
+    def _decode_command_data(command_type: str, raw_data: Any) -> dict[str, Any]:
+        try:
+            decoded = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+        except (json.JSONDecodeError, TypeError):
+            decoded = {}
+        return normalize_command_data(command_type, decoded)
 
     def _has_unique_sub_factor_constraint(self) -> bool:
         indexes = self._conn.execute("PRAGMA index_list(fingers)").fetchall()
@@ -149,7 +177,9 @@ class Database:
             return None
 
         data = dict(row)
-        data["command_data"] = json.loads(data["command_data"])
+        data["command_data"] = self._decode_command_data(
+            data["command_type"], data["command_data"]
+        )
         return data
 
     def get_commands(
@@ -185,7 +215,9 @@ class Database:
         result = []
         for row in rows:
             data = dict(row)
-            data["command_data"] = json.loads(data["command_data"])
+            data["command_data"] = self._decode_command_data(
+                data["command_type"], data["command_data"]
+            )
             result.append(data)
         return result
 
@@ -237,7 +269,12 @@ class Database:
             INSERT INTO commands (finger_id, command_type, command_data, enabled)
             VALUES (?, ?, ?, ?)
             """,
-            (finger_id, command_type, json.dumps(command_data), int(enabled)),
+            (
+                finger_id,
+                command_type,
+                json.dumps(normalize_command_data(command_type, command_data)),
+                int(enabled),
+            ),
         )
         self._conn.commit()
         return int(cur.lastrowid)
@@ -283,7 +320,9 @@ class Database:
         result = []
         for row in rows:
             data = dict(row)
-            data["command_data"] = json.loads(data["command_data"])
+            data["command_data"] = self._decode_command_data(
+                data["command_type"], data["command_data"]
+            )
             result.append(data)
         return result
 
@@ -307,7 +346,7 @@ class Database:
 
         return {
             "command_type": str(command_type),
-            "command_data": command_data,
+            "command_data": normalize_command_data(str(command_type), command_data),
             "enabled": bool(command.get("enabled", True)),
         }
 
@@ -364,7 +403,9 @@ class Database:
         for row in rows:
             item = dict(row)
             if item.get("command_data"):
-                item["command_data"] = json.loads(item["command_data"])
+                item["command_data"] = self._decode_command_data(
+                    item["command_type"], item["command_data"]
+                )
             result.append(item)
         return result
 

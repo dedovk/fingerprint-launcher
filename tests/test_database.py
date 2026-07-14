@@ -165,7 +165,32 @@ def test_replace_commands_accepts_type_alias_and_bad_data(tmp_path):
         assert commands[0]["command_type"] == "open_url"
         assert commands[0]["command_data"]["url"] == "https://github.com"
         assert commands[1]["command_type"] == "lock_screen"
-        assert commands[1]["command_data"] == {}
+        assert commands[1]["command_data"] == {
+            "schema_version": 1,
+            "delay_before": 0.0,
+            "delay_after": 0.0,
+        }
+
+
+def test_corrupted_command_json_is_repaired_during_migration(tmp_path):
+    db_path = tmp_path / "test.sqlite3"
+    with Database(db_path) as db:
+        finger_id = db.save_finger("guid-1", 0x03, "finger")
+        db.save_command(finger_id, "lock_screen", {})
+
+    conn = sqlite3.connect(db_path)
+    conn.execute("UPDATE commands SET command_data = ?", ("{broken-json",))
+    conn.commit()
+    conn.close()
+
+    with Database(db_path) as db:
+        commands = db.get_commands_by_finger_id(finger_id)
+
+    assert commands[0]["command_data"] == {
+        "schema_version": 1,
+        "delay_before": 0.0,
+        "delay_after": 0.0,
+    }
 
 
 def test_get_commands_by_finger_id_returns_all_attached_commands(tmp_path):

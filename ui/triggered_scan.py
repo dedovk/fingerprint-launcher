@@ -7,6 +7,8 @@ from pathlib import Path
 from loguru import logger
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 
+from core.action_registry import format_action_summary
+from core.action_runner import ActionResult, ActionRunner, ActionStatus, ErrorPolicy
 from core.database import Database
 from core.executor import execute_command
 from core.winbio import (
@@ -34,6 +36,7 @@ _IDENTIFY_TIMEOUT_MS = 15000
 
 class TriggeredFingerprintScan(QObject):
     activity = pyqtSignal(str)
+    action_result = pyqtSignal(dict)
     error = pyqtSignal(str)
     finished = pyqtSignal()
 
@@ -42,6 +45,7 @@ class TriggeredFingerprintScan(QObject):
         self.db_path = Path(db_path)
         self.lang = lang
         self._session: WinBioSession | None = None
+        self._runner: ActionRunner | None = None
         self._cancelled = False
 
     @pyqtSlot()
@@ -143,18 +147,45 @@ class TriggeredFingerprintScan(QObject):
                 f"{tr(self.lang, 'no_action')}: {result.finger_name} ({key})")
             return
 
-        for command in commands:
-            execute_command(command)
+        self._runner = ActionRunner(
+            error_policy=ErrorPolicy.CONTINUE,
+            on_result=self._emit_action_result,
+        )
+        report = self._runner.run(commands)
+        self._runner = None
+
+        if report.status == ActionStatus.CANCELLED:
+            return
+        failed = [result for result in report.results if result.status == ActionStatus.FAILED]
+        if failed:
+            labels = action_labels(self.lang)
+            for failed_result in failed:
+                logger.warning(
+                    "Fingerprint action failed: type={} error={}",
+                    failed_result.command_type,
+                    failed_result.error or failed_result.message,
+                )
+            self.error.emit("; ".join(
+                f"{tr(self.lang, 'action_result_failed')}: "
+                f"{labels.get(result.command_type, result.command_type)}"
+                for result in failed
+            ))
+            return
 
         details = self._format_action_details(commands)
-        self.activity.emit(f"{result.finger_name}: {details}")
+        self.activity.emit(f"{finger_name}: {details}")
+
+    def _emit_action_result(self, result: ActionResult) -> None:
+        self.action_result.emit(result.to_dict())
 
     def _format_action_details(self, commands: list) -> str:
         details = []
         for command in commands:
-            data = command.get("command_data", {})
-            detail = (data.get("path") or data.get("url") or data.get("keys") or
-                      data.get("cmd") or ("LockWorkStation" if command["command_type"] == "lock_screen" else ""))
+            detail = format_action_summary(
+                command["command_type"],
+                command.get("command_data"),
+                labels.get(command["command_type"], command["command_type"]),
+            )
             if detail:
                 details.append(detail)
         return ", ".join(details) if details else tr(self.lang, "executed")
@@ -170,6 +201,8 @@ class TriggeredFingerprintScan(QObject):
     @pyqtSlot()
     def cancel(self) -> None:
         self._cancelled = True
+        if self._runner is not None:
+            self._runner.cancel()
         if self._session is not None:
             try:
                 self._session.cancel()

@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -16,25 +17,163 @@ from PyQt6.QtWidgets import (
     QWidget,
     QScrollArea,
 )
-from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QKeySequence
+from PyQt6.QtCore import Qt, QObject, QSize, QThread, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QKeySequence, QPixmap
 
 import time
 
+from core.action_registry import (
+    ACTION_DEFINITIONS,
+    ActionValidationError,
+    build_command_data,
+    format_action_summary,
+    get_action_definition,
+    validate_command_data,
+)
 from core.database import Database
 from core.winbio import (
-    FINGER_NAMES,
     WINBIO_ID_TYPE_GUID,
     WINBIO_POOL_PRIVATE,
     WINBIO_POOL_SYSTEM,
     WINBIO_E_NO_MATCH,
     WINBIO_E_UNKNOWN_ID,
     S_OK,
+    WinBioError,
     WinBioSession,
     enumerate_biometric_units,
+    format_hresult,
     identity_key,
 )
-from ui.i18n import action_labels, tr
+from ui.action_picker import ActionPicker
+from ui.i18n import (
+    action_labels,
+    localized_finger_name,
+    localized_winbio_message,
+    tr,
+)
+from ui.theme import THEME, app_qss, icon
+
+
+DATA_FREE_ACTIONS = {
+    definition.command_type
+    for definition in ACTION_DEFINITIONS
+    if not definition.requires_value
+}
+WIZARD_WIDTH = 540
+WIZARD_COMPACT_HEIGHT = 427
+WIZARD_ACTION_EMPTY_HEIGHT = 560
+WIZARD_ACTION_HEIGHT = 643
+WIZARD_ACTION_BUTTON_WIDE = 476
+WIZARD_BROWSE_BUTTON_WIDTH = 126
+WIZARD_CONTROL_GAP = 8
+
+
+def _wizard_button(text: str, kind: str, icon_name: str | None = None) -> QPushButton:
+    button = QPushButton(text)
+    button.setProperty("kind", kind)
+    if icon_name:
+        button.setProperty("iconName", icon_name)
+        button.setIcon(icon(icon_name))
+        button.setIconSize(QSize(14, 14))
+    return button
+
+
+class WizardTitleBar(QFrame):
+    def __init__(self, parent: QDialog, title: str) -> None:
+        super().__init__(parent)
+        self.window = parent
+        self.drag_pos = None
+
+
+class CurrentPageStack(QStackedWidget):
+    def sizeHint(self) -> QSize:  # type: ignore[override]
+        widget = self.currentWidget()
+        return widget.sizeHint() if widget is not None else super().sizeHint()
+
+    def minimumSizeHint(self) -> QSize:  # type: ignore[override]
+        widget = self.currentWidget()
+        return widget.minimumSizeHint() if widget is not None else super().minimumSizeHint()
+        self.setFixedHeight(45)
+        self.setProperty("role", "titleWizard")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(20, 0, 20, 0)
+        layout.setSpacing(8)
+        app_icon = QLabel("FL")
+        app_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        app_icon.setFixedSize(16, 16)
+        app_icon.setStyleSheet("background:#1D74F7;color:white;border-radius:2px;font-size:8px;font-weight:700;")
+        layout.addWidget(app_icon)
+        self.title = QLabel(title)
+        self.title.setProperty("role", "wizardTitle")
+        layout.addWidget(self.title)
+        layout.addStretch()
+        self.close_btn = QPushButton()
+        self.close_btn.setProperty("iconName", "close_wizard_fixed")
+        self.close_btn.setIcon(icon("close_wizard_fixed"))
+        self.close_btn.setIconSize(QSize(14, 14))
+        self.close_btn.setProperty("role", "wizardWindowButton")
+        self.close_btn.clicked.connect(parent.close)
+        layout.addWidget(self.close_btn)
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.drag_pos = event.globalPosition().toPoint() - self.window.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
+        if self.drag_pos is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self.window.move(event.globalPosition().toPoint() - self.drag_pos)
+
+    def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
+        self.drag_pos = None
+
+
+class CleanWizardTitleBar(QFrame):
+    def __init__(self, parent: QDialog, title: str) -> None:
+        super().__init__(parent)
+        self.window = parent
+        self.drag_pos = None
+        self.setFixedHeight(45)
+        self.setProperty("role", "titleWizard")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(20, 0, 20, 0)
+        layout.setSpacing(8)
+        app_icon = QLabel("FL")
+        app_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        app_icon.setFixedSize(16, 16)
+        app_icon.setStyleSheet("background:#1D74F7;color:white;border-radius:2px;font-size:8px;font-weight:700;")
+        layout.addWidget(app_icon)
+        self.title = QLabel(title)
+        self.title.setProperty("role", "wizardTitle")
+        layout.addWidget(self.title)
+        layout.addStretch()
+        self.close_btn = QPushButton()
+        self.close_btn.setProperty("iconName", "close_wizard_fixed")
+        self.close_btn.setIcon(icon("close_wizard_fixed"))
+        self.close_btn.setIconSize(QSize(14, 14))
+        self.close_btn.setProperty("role", "wizardWindowButton")
+        self.close_btn.clicked.connect(parent.close)
+        layout.addWidget(self.close_btn)
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.drag_pos = event.globalPosition().toPoint() - self.window.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
+        if self.drag_pos is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self.window.move(event.globalPosition().toPoint() - self.drag_pos)
+
+    def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
+        self.drag_pos = None
+
+
+class WizardPageStack(QStackedWidget):
+    def sizeHint(self) -> QSize:  # type: ignore[override]
+        widget = self.currentWidget()
+        return widget.sizeHint() if widget is not None else super().sizeHint()
+
+    def minimumSizeHint(self) -> QSize:  # type: ignore[override]
+        widget = self.currentWidget()
+        return widget.minimumSizeHint() if widget is not None else super().minimumSizeHint()
 
 
 class HotkeyEdit(QLineEdit):
@@ -76,6 +215,8 @@ class HotkeyEdit(QLineEdit):
         int(Qt.Key.Key_Pause):      "pause",
         int(Qt.Key.Key_CapsLock):   "caps lock",
         int(Qt.Key.Key_NumLock):    "num lock",
+        int(Qt.Key.Key_Slash):      "/",
+        int(Qt.Key.Key_Backslash):  "\\",
     }
 
     # Standalone modifier keys — ignore presses of these alone.
@@ -156,10 +297,6 @@ class HotkeyEdit(QLineEdit):
         if modifiers & Qt.KeyboardModifier.ShiftModifier:
             parts.append("shift")
         if modifiers & Qt.KeyboardModifier.MetaModifier:
-            if not self.capture_only:
-                # Win-based system shortcuts (e.g. Win+R) are reserved by Windows.
-                # Users can type them manually into the field.
-                return
             parts.append("windows")
             has_primary_modifier = True
 
@@ -211,6 +348,11 @@ class _CaptureWorker(QObject):
                 self.captured.emit(result)
         except TimeoutError:
             self.failed.emit("timeout", tr(self.lang, "timeout"))
+        except WinBioError as exc:
+            self.failed.emit(
+                "error",
+                f"{format_hresult(exc.hr)}: {localized_winbio_message(self.lang, exc.hr)}",
+            )
         except RuntimeError as exc:
             self.failed.emit("error", str(exc))
         except Exception as exc:
@@ -246,6 +388,8 @@ class _CaptureWorker(QObject):
             timeout_ms = int(min(500, remaining * 1000))
             try:
                 result = self._session.identify(timeout_ms=timeout_ms)
+            except WinBioError:
+                raise
             except Exception as exc:
                 raise RuntimeError(str(exc))
 
@@ -260,7 +404,7 @@ class _CaptureWorker(QObject):
                     "identity_type": result.identity_type,
                     "identity_value": result.identity_value,
                     "sub_factor": result.sub_factor,
-                    "finger_name": result.finger_name,
+                    "finger_name": localized_finger_name(self.lang, result.sub_factor),
                 }
             elif result.hr == WINBIO_E_UNKNOWN_ID:
                 raise RuntimeError(tr(self.lang, "unknown_hello"))
@@ -284,124 +428,183 @@ class FingerWizard(QDialog):
         self.scanned = False
         self.actions = []
         self.editing_action_index: int | None = None
+        self._resize_pending = False
         self.result_guid = ""
         self.result_identity_type = WINBIO_ID_TYPE_GUID
         self.result_identity_value = ""
         self.result_sub_factor = 0x03
-        self.setWindowTitle(tr(lang, "edit_finger")
-                            if existing else tr(lang, "add_finger"))
-        self.resize(700, 550)
-        self.setMinimumSize(650, 450)
+        title = tr(lang, "edit_finger") if existing else tr(lang, "add_finger")
+        self.setWindowTitle(title)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
+        self.setFixedSize(WIZARD_WIDTH, WIZARD_COMPACT_HEIGHT)
+        self.setStyleSheet(app_qss())
 
         self._capture_thread: QThread | None = None
         self._capture_worker: _CaptureWorker | None = None
 
         layout = QVBoxLayout(self)
-        self.stack = QStackedWidget()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self.title_bar = CleanWizardTitleBar(self, title)
+        layout.addWidget(self.title_bar)
+
+        body = QWidget()
+        self.body_layout = QVBoxLayout(body)
+        self.body_layout.setContentsMargins(16, 26, 16, 25)
+        self.body_layout.setSpacing(0)
+        self.stack = WizardPageStack()
+        self.stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+        self.stack.setMinimumHeight(0)
+        self.stack.setFixedHeight(self._stack_height_for_index(0))
         self.stack.addWidget(self._capture_step())
         self.stack.addWidget(self._actions_step())
         self.stack.addWidget(self._done_step())
-        layout.addWidget(self.stack)
+        self.stack.currentChanged.connect(lambda _: self._sync_window_size())
+        self.body_layout.addWidget(self.stack, 1)
 
         nav = QHBoxLayout()
-        self.back_btn = QPushButton(tr(lang, "back"))
-        self.next_btn = QPushButton(tr(lang, "next"))
-        self.back_btn.setMinimumWidth(96)
-        self.next_btn.setMinimumWidth(96)
+        nav.setContentsMargins(0, 18, 0, 0)
+        self.back_btn = _wizard_button(tr(lang, "back"), "ghost", "back")
+        self.next_btn = _wizard_button(tr(lang, "next"), "dark", "next")
+        self.back_btn.setFixedSize(96, 36)
+        self.next_btn.setFixedSize(83, 36)
         self.back_btn.clicked.connect(self.prev_step)
         self.next_btn.clicked.connect(self.next_step)
-        nav.addStretch()
         nav.addWidget(self.back_btn)
+        nav.addStretch()
         nav.addWidget(self.next_btn)
-        layout.addLayout(nav)
+        self.body_layout.addLayout(nav)
+        layout.addWidget(body, 1)
 
         if existing:
             self._load_existing(existing)
         self._sync_nav()
+        self._sync_window_size()
 
     def _capture_step(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setSpacing(12)
-        self.capture_label = QLabel(tr(self.lang, "scan_prompt"))
-        self.capture_label.setObjectName("captureMessage")
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        card = QFrame()
+        card.setProperty("role", "card")
+        card.setFixedHeight(254)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(34, 22, 34, 22)
+        card_layout.setSpacing(0)
+        card_layout.addStretch()
+        icon_label = QLabel()
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_label.setPixmap(icon("icon_scan").pixmap(72, 72))
+        self.capture_title = QLabel(tr(self.lang, "scan_prompt_title"))
+        self.capture_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.capture_title.setStyleSheet(f"font-size:16px;font-weight:700;color:{THEME.text};")
+        self.capture_label = QLabel(tr(self.lang, "scan_prompt_body"))
+        self.capture_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.capture_label.setWordWrap(True)
-        self.capture_label.setMinimumHeight(80)
-        self.capture_btn = QPushButton(tr(self.lang, "scan_finger"))
-        self.capture_btn.setMinimumHeight(40)
+        self.capture_label.setStyleSheet(f"color:{THEME.subtle};line-height:1.5;")
+        self.capture_btn = _wizard_button(tr(self.lang, "scan_finger"), "primary")
+        self.capture_btn.setFixedSize(max(142, self.capture_btn.sizeHint().width()), 36)
         self.capture_btn.clicked.connect(self.capture_finger)
-        layout.addWidget(self.capture_label)
-        layout.addWidget(self.capture_btn)
-        layout.addStretch()
+        card_layout.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignCenter)
+        card_layout.addSpacing(20)
+        card_layout.addWidget(self.capture_title)
+        card_layout.addSpacing(12)
+        card_layout.addWidget(self.capture_label)
+        card_layout.addSpacing(20)
+        card_layout.addWidget(self.capture_btn, 0, Qt.AlignmentFlag.AlignCenter)
+        card_layout.addStretch()
+        layout.addSpacing(0)
+        layout.addWidget(card)
+        layout.addStretch(1)
         return page
 
     def _actions_step(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setSpacing(12)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
 
         self.label_input = QLineEdit()
         self.label_input.setPlaceholderText(tr(self.lang, "finger_name_hint"))
-        self.label_input.setMinimumHeight(32)
-        label_layout = QFormLayout()
-        label_layout.addRow(tr(self.lang, "finger_name"), self.label_input)
-        layout.addLayout(label_layout)
+        self.label_input.setFixedHeight(42)
+        name_label = QLabel(tr(self.lang, "finger_name").upper())
+        name_label.setProperty("role", "fieldLabel")
+        layout.addWidget(name_label)
+        layout.addWidget(self.label_input)
+        layout.addSpacing(8)
 
-        title = QLabel("<b>" + tr(self.lang, "actions") + ":</b>")
+        title = QLabel(tr(self.lang, "actions").upper())
+        title.setProperty("role", "fieldLabel")
         layout.addWidget(title)
 
-        self.action_type = QComboBox()
-        self.action_type.setMinimumHeight(32)
-        for command_type, label in action_labels(self.lang).items():
-            self.action_type.addItem(label, command_type)
+        self.action_card = QFrame()
+        self.action_card.setProperty("role", "card")
+        self.action_card.setFixedHeight(150)
+        action_card_layout = QVBoxLayout(self.action_card)
+        action_card_layout.setContentsMargins(16, 14, 16, 14)
+        action_card_layout.setSpacing(8)
+        self.action_type = ActionPicker(self.lang)
+        self.action_type.setFixedHeight(42)
         self.action_type.currentIndexChanged.connect(self._sync_action_fields)
 
-        self.action_value_label = QLabel(tr(self.lang, "data"))
+        self.action_value_label = QLabel(tr(self.lang, "data").upper())
+        self.action_value_label.setProperty("role", "fieldLabel")
         self.action_value = QLineEdit()
         self.action_value.setPlaceholderText(tr(self.lang, "data_hint"))
-        self.action_value.setMinimumHeight(32)
+        self.action_value.setFixedHeight(42)
         self.hotkey_value = HotkeyEdit()
-        self.hotkey_value.setMinimumHeight(32)
+        self.hotkey_value.setFixedHeight(42)
         self.action_value_stack = QStackedWidget()
+        self.action_value_stack.setObjectName("actionValueStack")
+        self.action_value_stack.setStyleSheet(
+            "QStackedWidget#actionValueStack { background: transparent; border: 0; }"
+        )
         self.action_value_stack.addWidget(self.action_value)
         self.action_value_stack.addWidget(self.hotkey_value)
-        self.action_value_stack.setMaximumHeight(40)
+        self.action_value_stack.setFixedHeight(42)
 
-        self.browse = QPushButton(tr(self.lang, "choose_file"))
-        self.browse.setMinimumHeight(32)
-        self.browse.setMinimumWidth(140)
+        self.browse = _wizard_button(tr(self.lang, "choose_file"), "secondary")
+        self.browse.setFixedSize(max(WIZARD_BROWSE_BUTTON_WIDTH, self.browse.sizeHint().width()), 30)
         self.browse.clicked.connect(self.choose_file)
 
-        self.add_action_btn = QPushButton(tr(self.lang, "add_action"))
-        self.add_action_btn.setMinimumHeight(32)
-        self.add_action_btn.setMinimumWidth(140)
+        self.add_action_btn = _wizard_button(tr(self.lang, "add_action"), "primary", "add")
+        self.add_action_btn.setIconSize(QSize(14, 14))
+        self.add_action_btn.setFixedSize(156, 30)
         self.add_action_btn.clicked.connect(self._add_action)
 
-        action_form = QFormLayout()
-        action_form.setSpacing(8)
-        action_form.addRow(tr(self.lang, "action_type"), self.action_type)
-        action_form.addRow(self.action_value_label, self.action_value_stack)
-        layout.addLayout(action_form)
+        action_type_label = QLabel(tr(self.lang, "action_type").upper())
+        action_type_label.setProperty("role", "fieldLabel")
+        action_card_layout.addWidget(action_type_label)
+        action_card_layout.addWidget(self.action_type)
+        action_card_layout.addWidget(self.action_value_label)
+        action_card_layout.addWidget(self.action_value_stack)
 
         controls_row = QHBoxLayout()
         controls_row.setSpacing(8)
         controls_row.addWidget(self.browse)
         controls_row.addWidget(self.add_action_btn)
         controls_row.addStretch()
-        layout.addLayout(controls_row)
+        self.controls_row = controls_row
+        action_card_layout.addSpacing(6)
+        action_card_layout.addLayout(controls_row)
+        layout.addWidget(self.action_card)
 
-        actions_title = QLabel(
-            "<b>" + tr(self.lang, "added_actions") + ":</b>")
+        actions_title = QLabel(tr(self.lang, "added_actions").upper())
+        actions_title.setProperty("role", "fieldLabel")
         layout.addWidget(actions_title)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setMinimumHeight(120)
+        self.actions_scroll = QScrollArea()
+        self.actions_scroll.setWidgetResizable(True)
+        self.actions_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.actions_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.actions_scroll.setFixedHeight(148)
         self.actions_container = QWidget()
         self.actions_layout = QVBoxLayout(self.actions_container)
-        self.actions_layout.setSpacing(6)
-        scroll.setWidget(self.actions_container)
-        layout.addWidget(scroll)
+        self.actions_layout.setContentsMargins(0, 0, 8, 0)
+        self.actions_layout.setSpacing(8)
+        self.actions_scroll.setWidget(self.actions_container)
+        layout.addWidget(self.actions_scroll)
 
         self._sync_action_fields()
         self._update_actions_display()
@@ -410,13 +613,35 @@ class FingerWizard(QDialog):
     def _done_step(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setSpacing(12)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self.done_card = QFrame()
+        self.done_card.setProperty("role", "card")
+        self.done_card.setFixedHeight(208)
+        card_layout = QVBoxLayout(self.done_card)
+        card_layout.setContentsMargins(34, 20, 34, 20)
+        card_layout.setSpacing(0)
+        card_layout.addStretch()
+        self.done_icon = QLabel()
+        self.done_icon.setFixedSize(72, 72)
+        self.done_icon.setPixmap(icon("icon_done").pixmap(72, 72))
+        self.done_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.done_title = QLabel(tr(self.lang, "ready"))
+        self.done_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.done_title.setStyleSheet(f"font-size:16px;font-weight:700;color:{THEME.text};")
         self.done_label = QLabel()
-        self.done_label.setObjectName("captureMessage")
+        self.done_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.done_label.setWordWrap(True)
-        self.done_label.setMinimumHeight(80)
-        layout.addWidget(self.done_label)
-        layout.addStretch()
+        self.done_label.setMaximumHeight(70)
+        self.done_label.setStyleSheet(f"color:{THEME.subtle};")
+        card_layout.addWidget(self.done_icon, 0, Qt.AlignmentFlag.AlignCenter)
+        card_layout.addSpacing(20)
+        card_layout.addWidget(self.done_title)
+        card_layout.addSpacing(14)
+        card_layout.addWidget(self.done_label)
+        card_layout.addStretch()
+        layout.addWidget(self.done_card)
+        layout.addStretch(1)
         return page
 
     def capture_finger(self) -> None:
@@ -451,14 +676,15 @@ class FingerWizard(QDialog):
             self.label_input.setText(finger_name)
         key = identity_key(self.result_identity_type,
                            self.result_identity_value, self.result_sub_factor)
-        self.capture_label.setText(
-            f"{tr(self.lang, 'recognized')}: {finger_name}\n{tr(self.lang, 'key')}: {key}")
+        self.capture_title.setText(f"{tr(self.lang, 'recognized')}: {finger_name}")
+        self.capture_label.setText(f"{tr(self.lang, 'key')}: {key}")
         self.capture_btn.setEnabled(True)
         self._sync_nav()
 
     @pyqtSlot(str, str)
     def _on_capture_failed(self, error_kind: str, message: str) -> None:
         self.scanned = False
+        self.capture_title.setText(tr(self.lang, "scan_prompt_title"))
         self.capture_label.setText(message)
         self.capture_btn.setEnabled(True)
         self._sync_nav()
@@ -509,6 +735,47 @@ class FingerWizard(QDialog):
         self.stack.setCurrentIndex(max(0, self.stack.currentIndex() - 1))
         self._sync_nav()
 
+    def _sync_window_size(self) -> None:
+        height = self._window_height_for_index(self.stack.currentIndex())
+        if hasattr(self, "body_layout"):
+            self.body_layout.setContentsMargins(16, 18 if self.stack.currentIndex() == 1 else 26, 16, 25)
+        self.stack.setFixedHeight(self._stack_height_for_index(self.stack.currentIndex()))
+        self.layout().activate()
+        if self.height() != height:
+            self.setFixedSize(WIZARD_WIDTH, height)
+            self.resize(WIZARD_WIDTH, height)
+
+    def _stack_height_for_index(self, index: int) -> int:
+        if index != 1:
+            return 277
+        return 410 if self._use_compact_action_page() else 493
+
+    def _window_height_for_index(self, index: int) -> int:
+        if index != 1:
+            return WIZARD_COMPACT_HEIGHT
+        return WIZARD_ACTION_EMPTY_HEIGHT if self._use_compact_action_page() else WIZARD_ACTION_HEIGHT
+
+    def _use_compact_action_page(self) -> bool:
+        return self._selected_action() in DATA_FREE_ACTIONS
+
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        QTimer.singleShot(0, self._sync_window_size)
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        if not hasattr(self, "stack") or self._resize_pending:
+            return
+        expected = self._window_height_for_index(self.stack.currentIndex())
+        if self.height() == expected:
+            return
+        self._resize_pending = True
+        QTimer.singleShot(0, self._finish_resize_sync)
+
+    def _finish_resize_sync(self) -> None:
+        self._resize_pending = False
+        self._sync_window_size()
+
     def _add_action(self) -> None:
         action = self._selected_action()
         if action == "hotkey":
@@ -517,21 +784,31 @@ class FingerWizard(QDialog):
             self.hotkey_value.setText(value)
         else:
             value = self.action_value.text().strip()
-        if not value and action != "lock_screen":
+        if not value and action not in DATA_FREE_ACTIONS:
+            return
+        command_data = self._command_data(action, value)
+        if self.editing_action_index is not None:
+            previous_data = self.actions[self.editing_action_index].get("command_data") or {}
+            command_data["delay_before"] = previous_data.get("delay_before", 0.0)
+            command_data["delay_after"] = previous_data.get("delay_after", 0.0)
+        try:
+            command_data = validate_command_data(action, command_data)
+        except ActionValidationError:
             return
         action_info = {
             "command_type": action,
-            "command_data": self._command_data(action, value),
+            "command_data": command_data,
         }
         if self.editing_action_index is None:
             self.actions.append(action_info)
         else:
             self.actions[self.editing_action_index] = action_info
             self.editing_action_index = None
-            self.add_action_btn.setText(tr(self.lang, "add_action"))
+            self._set_add_button_mode()
         self.action_value.clear()
         self.hotkey_value.clear()
         self._update_actions_display()
+        self._sync_window_size()
 
     def _delete_action(self, index: int) -> None:
         if 0 <= index < len(self.actions):
@@ -540,10 +817,11 @@ class FingerWizard(QDialog):
                 self.editing_action_index = None
                 self.action_value.clear()
                 self.hotkey_value.clear()
-                self.add_action_btn.setText(tr(self.lang, "add_action"))
+                self._set_add_button_mode()
             elif self.editing_action_index is not None and self.editing_action_index > index:
                 self.editing_action_index -= 1
             self._update_actions_display()
+            self._sync_window_size()
 
     def _edit_action(self, index: int) -> None:
         if not 0 <= index < len(self.actions):
@@ -558,20 +836,15 @@ class FingerWizard(QDialog):
         self._sync_action_fields()
 
         data = action_info.get("command_data") or {}
-        value = (
-            data.get("path")
-            or data.get("url")
-            or data.get("keys")
-            or data.get("cmd")
-            or ""
-        )
+        definition = get_action_definition(command_type)
+        value = data.get(definition.value_field, "") if definition.value_field else ""
         if command_type == "hotkey":
             self.hotkey_value.setText(str(value))
             self.hotkey_value.setFocus()
         else:
             self.action_value.setText(str(value))
             self.action_value.setFocus()
-        self.add_action_btn.setText("Update action")
+        self._set_update_button_mode()
 
     def _update_actions_display(self) -> None:
         while self.actions_layout.count():
@@ -582,7 +855,7 @@ class FingerWizard(QDialog):
         labels = action_labels(self.lang)
         if not self.actions:
             no_action_label = QLabel(tr(self.lang, "no_action"))
-            no_action_label.setStyleSheet("color: #999; font-style: italic;")
+            no_action_label.setStyleSheet(f"color:{THEME.muted};font-style:italic;")
             self.actions_layout.addWidget(no_action_label)
         else:
             for i, action_info in enumerate(self.actions):
@@ -591,48 +864,59 @@ class FingerWizard(QDialog):
         self.actions_layout.addStretch()
 
     def _add_action_row(self, index: int, action_info: dict, labels: dict) -> None:
-        row = QWidget()
+        row = QFrame()
+        row.setProperty("role", "actionRow")
+        row.setFixedHeight(64)
         row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(8, 6, 8, 6)
-        row_layout.setSpacing(8)
+        row_layout.setContentsMargins(14, 8, 14, 8)
+        row_layout.setSpacing(10)
 
         cmd_type = action_info["command_type"]
         data = action_info["command_data"]
-        summary = data.get("path") or data.get("url") or data.get("keys") or data.get(
-            "cmd") or ("LockWorkStation" if cmd_type == "lock_screen" else "")
+        summary = format_action_summary(
+            cmd_type,
+            data,
+            labels.get(cmd_type, cmd_type),
+        )
 
-        label_text = f"{index + 1}. {labels.get(cmd_type, cmd_type)}"
-        type_label = QLabel(label_text)
-        type_label.setMinimumWidth(120)
-        type_label.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Preferred)
-        type_label.setStyleSheet("font-weight: 600;")
+        number_label = QLabel(str(index + 1))
+        number_label.setFixedWidth(20)
+        number_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        number_label.setStyleSheet(f"color:{THEME.muted};font-size:13px;")
+
+        text_block = QVBoxLayout()
+        text_block.setSpacing(2)
+        type_label = QLabel(labels.get(cmd_type, cmd_type))
+        type_label.setMinimumWidth(0)
+        type_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        type_label.setStyleSheet(f"font-weight:600;color:{THEME.text};")
 
         value_label = QLabel(summary)
         value_label.setWordWrap(True)
-        value_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        value_label.setStyleSheet("color: #666;")
+        value_label.setMinimumWidth(0)
+        value_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Maximum)
+        value_label.setMaximumHeight(30)
+        value_label.setStyleSheet(f"color:{THEME.muted};font-family:Consolas,monospace;font-size:12px;")
+        text_block.addWidget(type_label)
+        text_block.addWidget(value_label)
 
-        edit_btn = QPushButton(tr(self.lang, "edit"))
-        edit_btn.setMinimumWidth(max(72, edit_btn.sizeHint().width()))
-        edit_btn.setMinimumHeight(28)
+        edit_btn = _wizard_button(tr(self.lang, "edit"), "actionSecondary", "edit")
+        edit_btn.setFixedSize(max(124, edit_btn.sizeHint().width()), 28)
         edit_btn.clicked.connect(lambda: self._edit_action(index))
 
-        delete_btn = QPushButton("X")
-        delete_btn.setMaximumWidth(32)
-        delete_btn.setMinimumHeight(28)
-        delete_btn.setStyleSheet(
-            "padding: 2px; font-weight: bold; color: #dc2626;")
+        delete_btn = _wizard_button("", "actionSecondary", "delete_action")
+        delete_btn.setFixedSize(30, 30)
         delete_btn.clicked.connect(lambda: self._delete_action(index))
 
-        row_layout.addWidget(type_label)
-        row_layout.addWidget(value_label, 1)
+        row_layout.addWidget(number_label)
+        row_layout.addLayout(text_block, 1)
         row_layout.addWidget(edit_btn)
         row_layout.addWidget(delete_btn)
 
         self.actions_layout.addWidget(row)
 
     def _save_binding(self) -> None:
-        default_label = FINGER_NAMES.get(self.result_sub_factor, "Unknown")
+        default_label = localized_finger_name(self.lang, self.result_sub_factor)
         label = self.label_input.text().strip() or default_label
         finger_id = self.db.save_finger(
             self.result_guid,
@@ -644,10 +928,15 @@ class FingerWizard(QDialog):
         )
         self.db.replace_commands(finger_id, self.actions)
         labels = action_labels(self.lang)
-        action_names = ", ".join(labels.get(
-            a["command_type"], a["command_type"]) for a in self.actions)
-        self.done_label.setText(tr(self.lang, "saved").format(
-            label=label, action=action_names))
+        if len(self.actions) == 1:
+            action_names = labels.get(self.actions[0]["command_type"], self.actions[0]["command_type"])
+        else:
+            action_names = f"{len(self.actions)} {tr(self.lang, 'actions').lower()}"
+        saved_text = tr(self.lang, "saved").format(label=label, action=action_names)
+        saved_text = saved_text.replace(
+            "<b>", f"<b style='color:{THEME.text}'>"
+        )
+        self.done_label.setText(saved_text)
 
     def _load_existing(self, finger: dict) -> None:
         self.scanned = True
@@ -673,30 +962,64 @@ class FingerWizard(QDialog):
         return str(self.action_type.currentData())
 
     def _command_data(self, action: str, value: str) -> dict:
-        if action == "launch_app":
-            return {"path": value, "args": ""}
-        if action == "open_url":
-            return {"url": value}
-        if action == "hotkey":
-            return {"keys": value}
-        if action == "shell":
-            return {"cmd": value, "hidden": True}
-        return {}
+        return build_command_data(action, value)
 
     def _sync_action_fields(self) -> None:
         action = self._selected_action()
-        needs_data = action != "lock_screen"
+        definition = get_action_definition(action)
+        needs_data = definition.requires_value
+        browse_active = action == "launch_app"
         self.action_value_label.setVisible(needs_data)
         self.action_value_stack.setVisible(needs_data)
-        self.browse.setVisible(action == "launch_app")
+        self.browse.setVisible(browse_active)
+        self.add_action_btn.setFixedSize(
+            self._add_button_width(browse_active),
+            30,
+        )
+        self.action_card.setFixedHeight(204 if needs_data else 126)
+        self._sync_window_size()
+        self.controls_row.setAlignment(
+            self.add_action_btn,
+            Qt.AlignmentFlag.AlignLeft if browse_active else Qt.AlignmentFlag.AlignHCenter,
+        )
         # Switch between regular text field and hotkey capture field.
-        if action == "hotkey":
+        if definition.editor == "hotkey":
             self.action_value_stack.setCurrentIndex(1)
             self.hotkey_value.setFocus()
         else:
             self.action_value_stack.setCurrentIndex(0)
 
+    def _set_add_button_mode(self) -> None:
+        self.add_action_btn.setText(tr(self.lang, "add_action"))
+        self.add_action_btn.setProperty("iconName", "add")
+        self.add_action_btn.setIcon(icon("add"))
+        self.add_action_btn.setIconSize(QSize(14, 14))
+        self.add_action_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.add_action_btn.setFixedSize(
+            self._add_button_width(self._selected_action() == "launch_app"),
+            30,
+        )
+        self._sync_action_fields()
+
+    def _set_update_button_mode(self) -> None:
+        self.add_action_btn.setText(tr(self.lang, "update_action"))
+        self.add_action_btn.setProperty("iconName", "check_version_white")
+        self.add_action_btn.setIcon(icon("check_version_white"))
+        self.add_action_btn.setIconSize(QSize(12, 12))
+        self.add_action_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.add_action_btn.setFixedSize(
+            self._add_button_width(self._selected_action() == "launch_app"),
+            30,
+        )
+        self._sync_action_fields()
+
+    def _add_button_width(self, browse_active: bool) -> int:
+        if browse_active:
+            return WIZARD_ACTION_BUTTON_WIDE - self.browse.width() - WIZARD_CONTROL_GAP
+        return WIZARD_ACTION_BUTTON_WIDE
+
     def _sync_nav(self) -> None:
+        self._sync_window_size()
         self.back_btn.setEnabled(
             self.stack.currentIndex() > 0
             and not (self.existing and self.stack.currentIndex() == 1)
@@ -705,3 +1028,16 @@ class FingerWizard(QDialog):
             self.stack.currentIndex() != 0 or self.scanned)
         self.next_btn.setText(tr(self.lang, "done") if self.stack.currentIndex(
         ) == self.stack.count() - 1 else tr(self.lang, "next"))
+        minimum_width = 100 if self.stack.currentIndex() == self.stack.count() - 1 else 83
+        self.next_btn.setFixedWidth(max(minimum_width, self.next_btn.sizeHint().width()))
+        if self.stack.currentIndex() == self.stack.count() - 1:
+            next_icon = "done"
+        elif not self.next_btn.isEnabled() and THEME.key != "light":
+            next_icon = "inactive_next"
+        else:
+            next_icon = "next"
+        self.next_btn.setProperty("iconName", next_icon)
+        self.next_btn.setIcon(icon(next_icon))
+        self.next_btn.setProperty("kind", "primary" if self.stack.currentIndex() == self.stack.count() - 1 else "dark")
+        self.next_btn.style().unpolish(self.next_btn)
+        self.next_btn.style().polish(self.next_btn)

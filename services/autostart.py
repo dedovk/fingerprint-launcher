@@ -19,7 +19,7 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_VALUE = "FingerprintLauncher"
 
 
-def setup_user_autostart(exe_path: str | None = None) -> None:
+def setup_user_autostart(exe_path: str | None = None, *, start_in_tray: bool = False) -> None:
     """Register the GUI to start at user logon.
 
     HKCU Run entries are visible in Task Manager's Startup tab and run inside
@@ -32,7 +32,7 @@ def setup_user_autostart(exe_path: str | None = None) -> None:
     import winreg
 
     _delete_legacy_scheduled_task()
-    command = _gui_launch_command(exe_path)
+    command = _gui_launch_command(exe_path, start_in_tray=True) if start_in_tray else _gui_launch_command(exe_path)
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
         winreg.SetValueEx(key, RUN_VALUE, 0, winreg.REG_SZ, command)
 
@@ -63,12 +63,13 @@ def bootstrap_distribution() -> list[str]:
     return errors
 
 
-def _gui_launch_command(exe_path: str | None = None) -> str:
+def _gui_launch_command(exe_path: str | None = None, *, start_in_tray: bool = False) -> str:
+    args = ["--tray"] if start_in_tray else []
     if _is_frozen():
         executable = exe_path or sys.executable
-        return _quote(executable)
+        return subprocess.list2cmdline([str(executable), *args])
     script = str(Path(__file__).resolve().parents[1] / "main.py")
-    return f"{_quote(sys.executable)} {_quote(script)}"
+    return subprocess.list2cmdline([str(sys.executable), script, *args])
 
 
 def _quote(value: str) -> str:

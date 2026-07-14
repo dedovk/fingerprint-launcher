@@ -10,7 +10,6 @@ from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 from core.action_registry import format_action_summary
 from core.action_runner import ActionResult, ActionRunner, ActionStatus, ErrorPolicy
 from core.database import Database
-from core.executor import execute_command
 from core.winbio import (
     E_ACCESSDENIED,
     S_OK,
@@ -24,11 +23,10 @@ from core.winbio import (
     acquire_focus,
     enumerate_biometric_units,
     format_hresult,
-    hresult_message,
     identity_key,
     release_focus,
 )
-from ui.i18n import tr
+from ui.i18n import action_labels, localized_finger_name, localized_winbio_message, tr
 
 
 _IDENTIFY_TIMEOUT_MS = 15000
@@ -78,9 +76,14 @@ class TriggeredFingerprintScan(QObject):
                 return
 
             self._handle_result(db, result)
+        except WinBioError as exc:
+            logger.exception(f"Triggered fingerprint scan failed: {exc}")
+            self.error.emit(
+                f"{format_hresult(exc.hr)}: {localized_winbio_message(self.lang, exc.hr)}"
+            )
         except Exception as exc:
             logger.exception(f"Triggered fingerprint scan failed: {exc}")
-            self.error.emit(str(exc))
+            self.error.emit(tr(self.lang, "scan_failed").format(error=exc))
         finally:
             release_focus()
             self._close_session()
@@ -122,11 +125,11 @@ class TriggeredFingerprintScan(QObject):
             return
 
         if result.hr in TRANSIENT_IDENTIFY_HRESULTS:
-            self.error.emit(hresult_message(result.hr))
+            self.error.emit(localized_winbio_message(self.lang, result.hr))
             return
 
         self.error.emit(
-            f"{format_hresult(result.hr)}: {hresult_message(result.hr)}")
+            f"{format_hresult(result.hr)}: {localized_winbio_message(self.lang, result.hr)}")
 
     def _dispatch_match(self, db: Database, result) -> None:
         guid = result.guid or ""
@@ -142,9 +145,10 @@ class TriggeredFingerprintScan(QObject):
         commands = db.get_commands(
             guid, sub_factor, result.identity_type, identity_value)
         key = identity_key(result.identity_type, identity_value, sub_factor)
+        finger_name = localized_finger_name(self.lang, sub_factor)
         if not commands:
             self.error.emit(
-                f"{tr(self.lang, 'no_action')}: {result.finger_name} ({key})")
+                f"{tr(self.lang, 'no_action')}: {finger_name} ({key})")
             return
 
         self._runner = ActionRunner(
@@ -180,6 +184,7 @@ class TriggeredFingerprintScan(QObject):
 
     def _format_action_details(self, commands: list) -> str:
         details = []
+        labels = action_labels(self.lang)
         for command in commands:
             detail = format_action_summary(
                 command["command_type"],

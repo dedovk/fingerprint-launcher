@@ -55,6 +55,27 @@ TRANSIENT_IDENTIFY_HRESULTS = {
     WINBIO_E_SESSION_BUSY,
 }
 
+HRESULT_MESSAGE_KEYS = {
+    S_OK: "winbio_ok",
+    WINBIO_E_UNSUPPORTED_FACTOR: "winbio_unsupported_factor",
+    WINBIO_E_INVALID_UNIT: "winbio_invalid_unit",
+    WINBIO_E_UNKNOWN_ID: "winbio_unknown_id",
+    WINBIO_E_CANCELED: "winbio_cancelled",
+    WINBIO_E_NO_MATCH: "winbio_no_match",
+    WINBIO_E_CAPTURE_ABORTED: "winbio_capture_aborted",
+    WINBIO_E_ENROLLMENT_IN_PROGRESS: "winbio_enrollment_in_progress",
+    WINBIO_E_BAD_CAPTURE: "winbio_bad_capture",
+    WINBIO_E_INVALID_CONTROL_CODE: "winbio_invalid_control_code",
+    WINBIO_E_DATA_COLLECTION_IN_PROGRESS: "winbio_data_collection_in_progress",
+    WINBIO_E_INVALID_DEVICE_STATE: "winbio_invalid_device_state",
+    WINBIO_E_DEVICE_BUSY: "winbio_device_busy",
+    WINBIO_E_SESSION_BUSY: "winbio_session_busy",
+    WINBIO_E_SENSOR_UNAVAILABLE: "winbio_sensor_unavailable",
+    WINBIO_E_DEVICE_FAILURE: "winbio_device_failure",
+    WINBIO_I_MORE_DATA: "winbio_more_data",
+    E_ACCESSDENIED: "winbio_access_denied",
+}
+
 REJECT_DETAIL_MESSAGES = {
     1: "Палець занадто високо",
     2: "Палець занадто низько",
@@ -90,6 +111,20 @@ FINGER_NAMES = {
     0xFC: "Невказаний палець 8",
     0xFD: "Невказаний палець 9",
     0xFE: "Невказаний палець 10",
+}
+
+FINGER_NAME_KEYS = {
+    0x01: "finger_unknown",
+    0x02: "finger_right_thumb",
+    0x03: "finger_right_index",
+    0x04: "finger_right_middle",
+    0x05: "finger_right_ring",
+    0x06: "finger_right_little",
+    0x07: "finger_left_thumb",
+    0x08: "finger_left_index",
+    0x09: "finger_left_middle",
+    0x0A: "finger_left_ring",
+    0x0B: "finger_left_little",
 }
 
 
@@ -247,6 +282,24 @@ def normalize_hresult(hr: int) -> int:
 
 def format_hresult(hr: int) -> str:
     return f"0x{normalize_hresult(hr):08x}"
+
+
+def hresult_message_key(hr: int) -> str:
+    """Return a stable translation key for a WinBio result code."""
+
+    return HRESULT_MESSAGE_KEYS.get(normalize_hresult(hr), "winbio_unknown_error")
+
+
+def finger_name_key(sub_factor: int) -> tuple[str, dict[str, object]]:
+    """Return a translation key and format values for a WinBio finger code."""
+
+    code = int(sub_factor)
+    if 0xF5 <= code <= 0xFE:
+        return "finger_unspecified", {"number": code - 0xF4}
+    key = FINGER_NAME_KEYS.get(code)
+    if key is not None:
+        return key, {}
+    return "finger_unknown_code", {"code": f"0x{code:02x}"}
 
 
 def hresult_message(hr: int) -> str:

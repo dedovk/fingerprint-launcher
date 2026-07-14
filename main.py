@@ -11,6 +11,7 @@ from core.database import Database
 from services.autostart import bootstrap_distribution
 from ui.main_window import MainWindow
 from ui.tray import FingerprintTray
+from ui.i18n import tr
 
 
 ICON_PATH = Path(__file__).resolve().parent / "assets" / "icon.ico"
@@ -44,18 +45,15 @@ def set_windows_app_id() -> None:
         pass
 
 
-def startup_checks() -> list[str]:
+def startup_checks(lang: str = "uk") -> list[str]:
     errors: list[str] = []
     if sys.platform == "win32" and sys.getwindowsversion().major < 10:
-        errors.append("Windows 10 or newer is required")
+        errors.append(tr(lang, "startup_windows_version"))
     if sys.platform == "win32":
         try:
             ctypes.WinDLL("winbio.dll")
         except OSError:
-            errors.append(
-                "Windows Biometric Framework was not found. Check that the "
-                "Windows Biometric Service is installed and running."
-            )
+            errors.append(tr(lang, "startup_wbf_missing"))
     return errors
 
 
@@ -87,6 +85,7 @@ def main() -> int:
     set_windows_app_id()
     bootstrap_errors: list[str] = []
     with Database() as db:
+        lang = db.get_setting("language", "uk") or "uk"
         if db.get_setting("autostart", "1") == "1":
             bootstrap_errors = bootstrap_distribution()
 
@@ -94,7 +93,7 @@ def main() -> int:
     configure_app_font(app)
     app.setQuitOnLastWindowClosed(False)
 
-    errors = [*bootstrap_errors, *startup_checks()]
+    errors = [*bootstrap_errors, *startup_checks(lang)]
     if errors:
         QMessageBox.warning(None, "FingerprintLauncher", "\n".join(errors))
 
@@ -106,11 +105,14 @@ def main() -> int:
     tray = FingerprintTray(icon, lang=window.lang)
     tray.settings_action.triggered.connect(window.show_settings)
     window.language_changed.connect(tray.set_language)
+    window.theme_changed.connect(tray.set_theme)
     tray.quit_action.triggered.connect(window.shutdown)
     tray.quit_action.triggered.connect(app.quit)
     tray.show()
 
-    window.show()
+    start_in_tray = "--tray" in sys.argv
+    if not start_in_tray:
+        window.show()
     return app.exec()
 
 

@@ -9,6 +9,7 @@ from core.winbio import (
     WINBIO_ID_TYPE_SID,
     WinBioSession,
     hresult_message,
+    hresult_message_key,
     identity_key,
     identity_type_name,
     is_transient_identify_error,
@@ -29,6 +30,7 @@ def test_signed_hresult_normalizes_to_unsigned():
 def test_transient_hresult_has_human_message():
     assert is_transient_identify_error(WINBIO_E_CANCELED)
     assert "скасовано" in hresult_message(WINBIO_E_CANCELED)
+    assert hresult_message_key(WINBIO_E_BAD_CAPTURE) == "winbio_bad_capture"
 
 
 def test_reject_detail_message():

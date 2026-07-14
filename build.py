@@ -19,7 +19,7 @@ BASE_CMD = [
     "--file-version=1.0.0.0",
     "--product-version=1.0.0.0",
     "--enable-plugin=pyqt6",
-    "--include-data-files=assets/icon.ico=assets/icon.ico",
+    "--include-data-dir=assets=assets",
     "--output-dir=dist",
 ]
 

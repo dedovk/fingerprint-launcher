@@ -252,3 +252,28 @@ def test_done_step_keeps_icon_title_and_message_separate(tmp_path):
 
         wizard.deleteLater()
         app.processEvents()
+
+
+def test_failed_capture_keeps_scan_icon_size(tmp_path):
+    app = _app()
+    with Database(tmp_path / "capture-icon.sqlite3") as db:
+        wizard = FingerWizard(db, lang="en")
+        wizard.show()
+        app.processEvents()
+
+        original_size = wizard.capture_icon.size()
+        original_pixmap_size = wizard.capture_icon.pixmap().size()
+        wizard._on_capture_failed(
+            "unknown_finger",
+            "This finger is not enrolled in Windows Hello. Open Windows Settings, "
+            "add this finger, then return here.",
+        )
+        app.processEvents()
+
+        assert wizard.capture_icon.size() == original_size
+        assert wizard.capture_icon.size().width() == 72
+        assert wizard.capture_icon.size().height() == 72
+        assert wizard.capture_icon.pixmap().size() == original_pixmap_size
+
+        wizard.deleteLater()
+        app.processEvents()

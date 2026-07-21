@@ -23,7 +23,10 @@ class ThemeSpec:
     action_button_bg: str
     title_main: str
     title_wizard: str
+    wizard_capture_surface: str
+    wizard_done_surface: str
     text: str
+    strong_text: str
     muted: str
     subtle: str
     border: str
@@ -52,6 +55,7 @@ class ThemeSpec:
     checkbox_border: str
     warning_bg: str
     success_bg: str
+    status_log_surface: str
     trc_bg: str
     trc_text: str
     trc_border: str
@@ -62,7 +66,8 @@ THEME_SPECS = {
         key="light", bg="#F5F5F7", surface="#FFFFFF",
         settings_surface="#FFFFFF", action_row_bg="#FFFFFF", action_button_bg="#EEEEF8",
         title_main="#202020", title_wizard="#EBEBEE",
-        text="#1A1A2E", muted="#6B7280", subtle="#6B7280",
+        wizard_capture_surface="#FFFFFF", wizard_done_surface="#FFFFFF",
+        text="#1A1A2E", strong_text="#1A1A2E", muted="#6B7280", subtle="#6B7280",
         border="#E4E4E7", input_border="#D8DCE3", settings_input_border="#D8DCE3", border_focus="#A7CEFF",
         primary="#1D74F7", primary_hover="#1767DE", primary_2="#2E84F1",
         secondary="#EEEEF8", secondary_text="#1A1A2E", dark_button="#3C3D3E",
@@ -72,13 +77,15 @@ THEME_SPECS = {
         scrollbar="#D9D9D9", tab_bar="#F5F5F7", tab_active="#FFFFFF", tab_active_text="#1A1A2E",
         tab_inactive="#E8E8EC", tab_inactive_text="#6B7280", checkbox_bg="#FFFFFF", checkbox_border="#CBD1DB",
         warning_bg="#E9E9EE", success_bg="#F0FDF4",
+        status_log_surface="#FFFFFF",
         trc_bg="#EEEEF8", trc_text="#1A1A2E", trc_border="#E4E4E7",
     ),
     "dark": ThemeSpec(
         key="dark", bg="#243044", surface="#4B5563",
         settings_surface="#4B5563", action_row_bg="#4B5563", action_button_bg="#243044",
         title_main="#1A2338", title_wizard="#1A2338",
-        text="#F9FAFB", muted="#BABABF", subtle="#9CA3AF",
+        wizard_capture_surface="#4B5563", wizard_done_surface="#4B5563",
+        text="#F9FAFB", strong_text="#F9FAFB", muted="#BABABF", subtle="#9CA3AF",
         border="#656565", input_border="#656565", settings_input_border="#656565", border_focus="#1D74F7",
         primary="#1D74F7", primary_hover="#1767DE", primary_2="#2E84F1",
         secondary="#243044", secondary_text="#F9FAFB", dark_button="#1F2937",
@@ -88,13 +95,15 @@ THEME_SPECS = {
         scrollbar="#656565", tab_bar="#243044", tab_active="#334155", tab_active_text="#1D74F7",
         tab_inactive="#1E2A3D", tab_inactive_text="#BABABF", checkbox_bg="#FFFFFF", checkbox_border="#D1D5DB",
         warning_bg="#4B5563", success_bg="#4B5563",
+        status_log_surface="#4B5563",
         trc_bg="#EEEEF8", trc_text="#1A1A2E", trc_border="#E4E4E7",
     ),
     "onyx": ThemeSpec(
         key="onyx", bg="#1A1A1D", surface="#1E1E22",
         settings_surface="#1E1E22", action_row_bg="#1E1E22", action_button_bg="#222226",
         title_main="#111113", title_wizard="#111113",
-        text="#F5F5F5", muted="#6B7280", subtle="#6B7280",
+        wizard_capture_surface="#1E1E22", wizard_done_surface="#1E1E22",
+        text="#F5F5F5", strong_text="#F5F5F5", muted="#6B7280", subtle="#6B7280",
         border="#2E2E32", input_border="#2E2E32", settings_input_border="rgba(131,131,131,163)", border_focus="#1D74F7",
         primary="#1D74F7", primary_hover="#1767DE", primary_2="#2E84F1",
         secondary="#252529", secondary_text="#F9FAFB", dark_button="#3C3D3E",
@@ -104,7 +113,25 @@ THEME_SPECS = {
         scrollbar="#6B7280", tab_bar="#1A1A1D", tab_active="#1E1E22", tab_active_text="#6AA6FF",
         tab_inactive="#27272B", tab_inactive_text="#6B7280", checkbox_bg="#FFFFFF", checkbox_border="#D1D5DB",
         warning_bg="#1E1E22", success_bg="#1E1E22",
+        status_log_surface="#1E1E22",
         trc_bg="#252529", trc_text="#F5F5F5", trc_border="#2E2E32",
+    ),
+    "graphite": ThemeSpec(
+        key="graphite", bg="#323339", surface="#3C3D46",
+        settings_surface="#3C3D46", action_row_bg="#3C3D46", action_button_bg="#3C3D46",
+        title_main="#1C1D21", title_wizard="#28292F",
+        wizard_capture_surface="#3C3D46", wizard_done_surface="#3C3D46",
+        text="#DFE0EA", strong_text="#F5F5F5", muted="#8E8F9E", subtle="#8E8F9E",
+        border="#4A4B55", input_border="#57585F", settings_input_border="#666666", border_focus="#1D74F7",
+        primary="#1D74F7", primary_hover="#1767DE", primary_2="#2E84F1",
+        secondary="#464750", secondary_text="#F9FAFB", dark_button="#5E5F6A",
+        disabled_bg="#343439", disabled_text="rgba(255,255,255,102)",
+        success="#16A34A", danger="#FF0004", selected_bg="#E341434C",
+        selected_action_text="#1D74F7",
+        scrollbar="#6B7280", tab_bar="#323339", tab_active="#3C3D46", tab_active_text="#1D74F7",
+        tab_inactive="#2C2D35", tab_inactive_text="#8E8F9E", checkbox_bg="#3C3D46", checkbox_border="#57585F",
+        warning_bg="#2C2D35", success_bg="#2C2D35", status_log_surface="#2C2D35",
+        trc_bg="#464750", trc_text="#DFE0EA", trc_border="#4A4B55",
     ),
 }
 
@@ -301,13 +328,23 @@ def app_qss() -> str:
             border: 1px solid {t.border};
             border-radius: 14px;
         }}
+        QFrame[role="captureCard"] {{
+            background: {t.wizard_capture_surface};
+            border: 1px solid {t.border};
+            border-radius: 14px;
+        }}
+        QFrame[role="doneCard"] {{
+            background: {t.wizard_done_surface};
+            border: 1px solid {t.border};
+            border-radius: 14px;
+        }}
         QFrame[role="settingsCard"] {{
             background: {t.settings_surface};
             border: 1px solid {t.border};
             border-radius: 14px;
         }}
         QFrame[role="statusLog"] {{
-            background: {t.surface};
+            background: {t.status_log_surface};
             border: 1px solid {t.border};
             border-radius: 14px;
         }}

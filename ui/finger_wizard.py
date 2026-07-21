@@ -487,7 +487,7 @@ class FingerWizard(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         card = QFrame()
-        card.setProperty("role", "card")
+        card.setProperty("role", "captureCard")
         card.setFixedHeight(254)
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(34, 22, 34, 22)
@@ -620,7 +620,7 @@ class FingerWizard(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         self.done_card = QFrame()
-        self.done_card.setProperty("role", "card")
+        self.done_card.setProperty("role", "doneCard")
         self.done_card.setFixedHeight(208)
         card_layout = QVBoxLayout(self.done_card)
         card_layout.setContentsMargins(34, 20, 34, 20)
@@ -938,7 +938,7 @@ class FingerWizard(QDialog):
             action_names = f"{len(self.actions)} {tr(self.lang, 'actions').lower()}"
         saved_text = tr(self.lang, "saved").format(label=label, action=action_names)
         saved_text = saved_text.replace(
-            "<b>", f"<b style='color:{THEME.text}'>"
+            "<b>", f"<b style='color:{THEME.strong_text}'>"
         )
         self.done_label.setText(saved_text)
 

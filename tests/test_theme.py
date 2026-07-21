@@ -66,3 +66,39 @@ def test_onyx_theme_uses_reference_tokens_and_complete_assets():
             assert Path(icon_path(icon_name)).parent.name == "onyx"
     finally:
         configure_theme("light")
+
+
+def test_graphite_theme_uses_reference_tokens_and_complete_assets():
+    try:
+        assert configure_theme("graphite")
+        assert THEME.bg == "#323339"
+        assert THEME.surface == "#3C3D46"
+        assert THEME.settings_surface == "#3C3D46"
+        assert THEME.title_main == "#1C1D21"
+        assert THEME.title_wizard == "#28292F"
+        assert THEME.tab_active == "#3C3D46"
+        assert THEME.tab_active_text == "#1D74F7"
+        assert THEME.tab_inactive == "#2C2D35"
+        assert THEME.tab_inactive_text == "#8E8F9E"
+        assert THEME.wizard_capture_surface == "#3C3D46"
+        assert THEME.wizard_done_surface == "#3C3D46"
+        assert THEME.warning_bg == "#2C2D35"
+        assert THEME.status_log_surface == "#2C2D35"
+        assert THEME.selected_bg == "#E341434C"
+        selected = QColor(THEME.selected_bg)
+        assert selected.getRgb() == (65, 67, 76, 227)
+        assert THEME.action_button_bg == "#3C3D46"
+        assert THEME.disabled_bg == "#343439"
+        assert THEME.trc_bg == "#464750"
+
+        for icon_name in (
+            "checkbox_checked",
+            "close_titlebar",
+            "close_wizard_fixed",
+            "check_version_white",
+            "mono_button",
+            "inactive_next",
+        ):
+            assert Path(icon_path(icon_name)).parent.name == "graphite"
+    finally:
+        configure_theme("light")

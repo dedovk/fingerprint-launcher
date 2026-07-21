@@ -174,6 +174,31 @@ def test_main_window_applies_onyx_theme_and_wizard_controls(tmp_path):
         app.processEvents()
 
 
+def test_main_window_applies_graphite_theme_and_wizard_surfaces(tmp_path):
+    app = _app()
+    with Database(tmp_path / "graphite-main.sqlite3") as db:
+        db.set_setting("theme", "graphite")
+        with patch("keyboard.add_hotkey", return_value=object()):
+            window = MainWindow(db)
+
+        assert window.theme_key == "graphite"
+        assert THEME.key == "graphite"
+        assert window._theme_buttons[2].diameter() == 38
+        assert "#323339" in window.styleSheet()
+        assert window.appearance_card.property("role") == "settingsCard"
+
+        wizard = FingerWizard(db, window, lang="en")
+        assert wizard.capture_icon.parent().property("role") == "captureCard"
+        assert wizard.done_card.property("role") == "doneCard"
+        assert "#28292F" in wizard.styleSheet()
+        assert "#3C3D46" in wizard.styleSheet()
+
+        wizard.deleteLater()
+        window.scan_prompt.hide()
+        window.deleteLater()
+        app.processEvents()
+
+
 def test_language_change_retranslates_dynamic_text_and_fits_buttons(tmp_path):
     app = _app()
     with Database(tmp_path / "translations.sqlite3") as db:

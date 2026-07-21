@@ -44,24 +44,5 @@ jobs:
       - name: Compile application modules
         run: python -m compileall core services ui main.py build.py check_wbf.py
 
-      - name: Test action engine and persistence
-        run: >-
-          python -X faulthandler -m pytest -ra
-          tests/test_action_registry.py
-          tests/test_action_runner.py
-          tests/test_database.py
-          tests/test_executor.py
-
-      - name: Test platform services and localization
-        run: >-
-          python -X faulthandler -m pytest -ra
-          tests/test_autostart.py
-          tests/test_winbio.py
-          tests/test_i18n.py
-
-      - name: Test UI, picker, and themes
-        run: >-
-          python -X faulthandler -m pytest -ra
-          tests/test_action_picker.py
-          tests/test_theme.py
-          tests/test_ui_integration.py
+      - name: Run complete test suite
+        run: python -X faulthandler -m pytest -ra tests

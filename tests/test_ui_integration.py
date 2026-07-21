@@ -101,6 +101,8 @@ def test_main_window_formats_registry_actions(tmp_path):
 
         assert window.fingers_table.item(0, 2).text()
         assert window.fingers_table.item(0, 3).text() == "https://example.com"
+        assert not window.autostart.isChecked()
+        assert window._current_autostart_mode() == "disabled"
         for index in range(12):
             window._append_activity(f"Action {index}")
         assert len(window._activity_entries) == 10

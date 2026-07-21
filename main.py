@@ -8,7 +8,7 @@ from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import QApplication, QMessageBox, QStyle
 
 from core.database import Database
-from services.autostart import bootstrap_distribution
+from services.autostart import bootstrap_distribution, remove_user_autostart
 from ui.main_window import MainWindow
 from ui.tray import FingerprintTray
 from ui.i18n import tr
@@ -80,14 +80,28 @@ def configure_app_font(app: QApplication) -> None:
     app.setFont(font)
 
 
+def configure_autostart(db: Database) -> list[str]:
+    """Apply the saved startup preference and migrate the old implicit default."""
+    setting = db.get_setting("autostart")
+    if setting == "1":
+        return bootstrap_distribution()
+    if setting is None:
+        db.set_setting("autostart", "0")
+        db.set_setting("autostart_mode", "disabled")
+        try:
+            remove_user_autostart()
+        except Exception as exc:
+            return [f"Autostart cleanup failed: {exc}"]
+    return []
+
+
 def main() -> int:
     hide_console_window()
     set_windows_app_id()
     bootstrap_errors: list[str] = []
     with Database() as db:
         lang = db.get_setting("language", "uk") or "uk"
-        if db.get_setting("autostart", "1") == "1":
-            bootstrap_errors = bootstrap_distribution()
+        bootstrap_errors = configure_autostart(db)
 
     app = QApplication(sys.argv)
     configure_app_font(app)

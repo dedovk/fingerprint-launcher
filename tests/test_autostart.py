@@ -4,6 +4,39 @@ from types import SimpleNamespace
 from services import autostart
 
 
+def test_missing_autostart_setting_migrates_to_disabled(tmp_path, monkeypatch):
+    import main as app_main
+    from core.database import Database
+
+    removed = []
+    monkeypatch.setattr(app_main, "remove_user_autostart", lambda: removed.append(True))
+    monkeypatch.setattr(app_main, "bootstrap_distribution", lambda: ["unexpected"])
+
+    with Database(tmp_path / "autostart-default.sqlite3") as db:
+        assert app_main.configure_autostart(db) == []
+        assert db.get_setting("autostart") == "0"
+        assert db.get_setting("autostart_mode") == "disabled"
+
+    assert removed == [True]
+
+
+def test_explicit_autostart_setting_is_preserved(tmp_path, monkeypatch):
+    import main as app_main
+    from core.database import Database
+
+    monkeypatch.setattr(app_main, "bootstrap_distribution", lambda: ["setup result"])
+    monkeypatch.setattr(
+        app_main,
+        "remove_user_autostart",
+        lambda: (_ for _ in ()).throw(AssertionError("must not remove explicit autostart")),
+    )
+
+    with Database(tmp_path / "autostart-enabled.sqlite3") as db:
+        db.set_setting("autostart", "1")
+        assert app_main.configure_autostart(db) == ["setup result"]
+        assert db.get_setting("autostart") == "1"
+
+
 def test_setup_user_autostart_creates_run_value_and_removes_legacy_task(monkeypatch):
     calls = []
     registry_values = {}

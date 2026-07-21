@@ -809,7 +809,7 @@ class MainWindow(QMainWindow):
         app_body.setContentsMargins(20, 8, 20, 8)
         app_body.setSpacing(28)
         self.autostart = QCheckBox()
-        self.autostart.setChecked(self.db.get_setting("autostart", "1") == "1")
+        self.autostart.setChecked(self.db.get_setting("autostart", "0") == "1")
         self.autostart.stateChanged.connect(self.toggle_autostart)
         app_body.addWidget(self.autostart, 1, Qt.AlignmentFlag.AlignVCenter)
         autostart_mode_box = QVBoxLayout()
@@ -1330,7 +1330,7 @@ class MainWindow(QMainWindow):
         mode = self.db.get_setting("autostart_mode", "")
         if mode in {"disabled", "current_user", "current_user_tray"}:
             return mode
-        return "current_user" if self.db.get_setting("autostart", "1") == "1" else "disabled"
+        return "current_user" if self.db.get_setting("autostart", "0") == "1" else "disabled"
 
     def _apply_autostart_mode(self, mode: str) -> None:
         import sys

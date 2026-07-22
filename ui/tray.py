@@ -46,9 +46,10 @@ class FingerprintTray(QSystemTrayIcon):
     def set_theme(self, theme_key: str) -> None:
         configure_theme(theme_key)
         checked_icon = icon_path("checkbox_checked").replace("\\", "/")
+        menu_background = THEME.popup_surface if THEME.is_gradient else THEME.surface
         stylesheet = f"""
             QMenu {{
-                background: {THEME.surface};
+                background: {menu_background};
                 color: {THEME.text};
                 border: 1px solid {THEME.border};
                 border-radius: 10px;

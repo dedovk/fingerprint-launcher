@@ -154,3 +154,49 @@ def test_blue_gradient_theme_uses_reference_tokens_and_complete_assets():
         assert 'stroke="#E0E7FF"' in support_svg
     finally:
         configure_theme("light")
+
+
+def test_purple_gradient_theme_uses_reference_tokens_and_complete_assets():
+    try:
+        assert configure_theme("purple_gradient")
+        assert THEME.bg == "#10152A"
+        assert THEME.title_main == "#060910"
+        assert THEME.tab_active == "rgba(255,255,255,46)"
+        assert THEME.tab_active_text == "#C084FC"
+        assert THEME.tab_inactive == "rgba(255,255,255,20)"
+        assert qcolor(THEME.tab_inactive_text).getRgb() == (245, 240, 250, 115)
+        assert THEME.surface == "rgba(255,255,255,23)"
+        assert THEME.table_header_bg == "rgba(255,255,255,10)"
+        assert THEME.settings_input_border == "rgba(209,213,219,77)"
+        assert THEME.popup_surface == "#482957"
+        assert THEME.scrollbar == "rgba(255,255,255,31)"
+        assert THEME.scrollbar_track == "#3D0E52"
+        assert THEME.selected_bg == "#BD42216A"
+        assert QColor(THEME.selected_bg).getRgb() == (66, 33, 106, 189)
+        assert qcolor(THEME.selection_border).getRgb() == (29, 116, 247, 115)
+        assert THEME.completion_action_text == "#C084FC"
+        assert "#10152A" in THEME.canvas_brush
+        assert "#3D0E52" in THEME.canvas_brush
+        assert "#7C3AED" in THEME.primary_brush
+        assert "#C026D3" in THEME.primary_brush
+        assert THEME.is_gradient
+
+        for icon_name in (
+            "checkbox_checked",
+            "close_titlebar",
+            "close_wizard_fixed",
+            "check_version_white",
+            "mono_button",
+            "inactive_next",
+            "icon_scan",
+            "icon_done",
+        ):
+            assert Path(icon_path(icon_name)).parent.name == "purple"
+        support_svg = Path(icon_path("support")).read_text(encoding="utf-8")
+        assert 'width="28"' in support_svg
+        assert 'stroke="#F5F0FA"' in support_svg
+        blue_assets = {path.name for path in (Path(icon_path("support")).parents[1] / "blue").glob("*.svg")}
+        purple_assets = {path.name for path in Path(icon_path("support")).parent.glob("*.svg")}
+        assert purple_assets == blue_assets
+    finally:
+        configure_theme("light")

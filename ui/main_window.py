@@ -49,6 +49,7 @@ from ui.theme import (
     configure_theme,
     icon,
     prepare_combo_popup,
+    qcolor,
     vertical_scrollbar_qss,
 )
 from ui.triggered_scan import TriggeredFingerprintScan
@@ -164,7 +165,7 @@ class TitleBar(QFrame):
             app_icon = QLabel("FL")
             app_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
             app_icon.setFixedSize(16, 16)
-            app_icon.setStyleSheet("background:#1D74F7;color:white;border-radius:2px;font-size:8px;font-weight:700;")
+            app_icon.setProperty("role", "appIcon")
             layout.addWidget(app_icon)
 
         self.title = QLabel()
@@ -387,17 +388,17 @@ class SelectionRowDelegate(QStyledItemDelegate):
     def _paint_selected_chrome(painter, option, index, last_column: int) -> None:
         rect = option.rect
         painter.save()
-        painter.setPen(QPen(QColor(THEME.border_focus), 1))
+        painter.setPen(QPen(qcolor(THEME.selection_border), 1))
         painter.drawLine(rect.topLeft(), rect.topRight())
         painter.drawLine(rect.left(), rect.bottom() - 1, rect.right(), rect.bottom() - 1)
         if index.column() == 0:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(THEME.primary))
             painter.drawRect(rect.left(), rect.top() + 1, 3, max(1, rect.height() - 1))
-            painter.setPen(QPen(QColor(THEME.border_focus), 1))
+            painter.setPen(QPen(qcolor(THEME.selection_border), 1))
             painter.drawLine(rect.topLeft(), rect.bottomLeft())
         if index.column() == last_column:
-            painter.setPen(QPen(QColor(THEME.border_focus), 1))
+            painter.setPen(QPen(qcolor(THEME.selection_border), 1))
             painter.drawLine(rect.right() - 1, rect.top(), rect.right() - 1, rect.bottom())
         painter.restore()
 
@@ -925,7 +926,7 @@ class MainWindow(QMainWindow):
             ("onyx", "#000100", "theme_onyx"),
             ("graphite", "#323338", "theme_graphite"),
             ("dark", "#121A2F", "theme_dark"),
-            ("purple_gradient", "#2A123E", "theme_purple"),
+            ("purple_gradient", ("#10152A", "#3D0E52"), "theme_purple"),
             ("blue_gradient", ("#0B1120", "#1E3A8A"), "theme_blue"),
         ]:
             swatch = ThemeSwatch(color, key == current_theme)

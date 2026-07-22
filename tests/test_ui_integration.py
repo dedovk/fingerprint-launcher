@@ -615,6 +615,43 @@ def test_main_window_applies_blue_gradient_theme_and_wizard_canvas(tmp_path):
         app.processEvents()
 
 
+def test_main_window_applies_purple_gradient_theme_and_wizard_canvas(tmp_path):
+    app = _app()
+    with Database(tmp_path / "purple-gradient-main.sqlite3") as db:
+        db.set_setting("theme", "purple_gradient")
+        with patch("keyboard.add_hotkey", return_value=object()):
+            window = MainWindow(db)
+
+        assert window.theme_key == "purple_gradient"
+        assert THEME.key == "purple_gradient"
+        assert window._theme_buttons[4].diameter() == 38
+        assert window._theme_buttons[4]._gradient_colors == ("#10152A", "#3D0E52")
+        window.show()
+        app.processEvents()
+        assert window.stack.y() == window.tab_bar.height()
+        assert "#10152A" in window.styleSheet()
+        assert "#3D0E52" in window.styleSheet()
+        assert "rgba(255,255,255,23)" in window.styleSheet()
+        assert THEME.canvas_brush in window.scan_prompt.styleSheet()
+        assert THEME.primary_brush in window.scan_prompt.styleSheet()
+
+        wizard = FingerWizard(db, window, lang="en")
+        assert "#7C3AED" in wizard.styleSheet()
+        assert "#C026D3" in wizard.styleSheet()
+        assert wizard.capture_icon.parent().property("role") == "captureCard"
+        assert wizard.done_card.property("role") == "doneCard"
+        assert wizard.next_btn.layoutDirection() == Qt.LayoutDirection.RightToLeft
+
+        wizard.stack.setCurrentIndex(wizard.stack.count() - 1)
+        wizard._sync_nav()
+        assert wizard.next_btn.layoutDirection() == Qt.LayoutDirection.LeftToRight
+
+        wizard.deleteLater()
+        window.scan_prompt.hide()
+        window.deleteLater()
+        app.processEvents()
+
+
 def test_language_change_retranslates_dynamic_text_and_fits_buttons(tmp_path):
     app = _app()
     with Database(tmp_path / "translations.sqlite3") as db:
@@ -663,11 +700,19 @@ def test_language_change_retranslates_dynamic_text_and_fits_buttons(tmp_path):
         window.scan_prompt.progress.setValue(400)
         window.scan_prompt.set_result("success")
         assert window.scan_prompt.progress.value() == 400
+        assert window.scan_prompt.width() == window.scan_prompt.MIN_WIDTH
         short_prompt_height = window.scan_prompt.height()
         window.scan_prompt.set_result(tr("ru", "unknown_hello"))
         assert window.scan_prompt.message.height() > 40
         assert window.scan_prompt.height() > short_prompt_height
+        assert window.scan_prompt.width() == window.scan_prompt.MIN_WIDTH
+        window.scan_prompt.set_result(
+            "No action selected: Unspecified finger 5 "
+            "(3:S-1-5-21-3661863302-2766317350-1867922774-1001:f9)"
+        )
+        assert window.scan_prompt.width() == window.scan_prompt.MIN_WIDTH
         window.scan_prompt.set_result("Very long diagnostic message " * 200)
+        assert window.scan_prompt.width() == window.scan_prompt.MIN_WIDTH
         assert window.scan_prompt.height() <= window.scan_prompt.MAX_HEIGHT
         assert window.scan_prompt.layout().minimumSize().height() <= window.scan_prompt.MAX_HEIGHT
         with patch("ui.scan_prompt.monotonic", side_effect=(100.0, 107.5)):

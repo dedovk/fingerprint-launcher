@@ -64,6 +64,8 @@ class ThemeSpec:
     table_header_bg: str | None = None
     popup_surface: str | None = None
     scrollbar_track: str | None = None
+    selection_border: str | None = None
+    completion_action_text: str | None = None
 
 
 THEME_SPECS = {
@@ -176,6 +178,46 @@ THEME_SPECS = {
         popup_surface="#263A6C",
         scrollbar_track="#1E3A8A",
     ),
+    "purple_gradient": ThemeSpec(
+        key="purple_gradient", bg="#10152A", surface="rgba(255,255,255,23)",
+        settings_surface="rgba(255,255,255,23)",
+        action_row_bg="rgba(255,255,255,20)",
+        action_button_bg="rgba(255,255,255,20)",
+        title_main="#060910", title_wizard="#060910",
+        wizard_capture_surface="rgba(255,255,255,23)",
+        wizard_done_surface="rgba(255,255,255,23)",
+        text="#F5F0FA", strong_text="#F5F0FA",
+        muted="rgba(245,240,250,115)", subtle="rgba(245,240,250,115)",
+        border="rgba(255,255,255,31)", input_border="rgba(255,255,255,38)",
+        settings_input_border="rgba(209,213,219,77)", border_focus="#C084FC",
+        primary="#7C3AED", primary_hover="#9333EA", primary_2="#C026D3",
+        secondary="rgba(255,255,255,20)", secondary_text="#F5F0FA",
+        dark_button="rgba(255,255,255,20)",
+        disabled_bg="rgba(49,21,21,20)", disabled_text="rgba(255,255,255,99)",
+        success="#16A34A", danger="#FF0004", selected_bg="#BD42216A",
+        selected_action_text="#C084FC", scrollbar="rgba(255,255,255,31)",
+        tab_bar="transparent", tab_active="rgba(255,255,255,46)",
+        tab_active_text="#C084FC", tab_inactive="rgba(255,255,255,20)",
+        tab_inactive_text="rgba(245,240,250,115)",
+        checkbox_bg="rgba(255,255,255,23)", checkbox_border="rgba(255,255,255,38)",
+        warning_bg="rgba(255,255,255,23)", success_bg="rgba(255,255,255,23)",
+        status_log_surface="rgba(255,255,255,23)",
+        trc_bg="rgba(255,255,255,20)", trc_text="#F5F0FA",
+        trc_border="rgba(255,255,255,31)",
+        canvas_brush=(
+            "qlineargradient(x1:0,y1:0,x2:1,y2:1,"
+            "stop:0 #10152A,stop:1 #3D0E52)"
+        ),
+        primary_brush=(
+            "qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            "stop:0 #7C3AED,stop:1 #C026D3)"
+        ),
+        table_header_bg="rgba(255,255,255,10)",
+        popup_surface="#482957",
+        scrollbar_track="#3D0E52",
+        selection_border="rgba(29,116,247,115)",
+        completion_action_text="#C084FC",
+    ),
 }
 
 
@@ -194,6 +236,8 @@ class Theme:
         self.table_header_bg = spec.table_header_bg or spec.bg
         self.popup_surface = spec.popup_surface or spec.surface
         self.scrollbar_track = spec.scrollbar_track or "transparent"
+        self.selection_border = spec.selection_border or spec.border_focus
+        self.completion_action_text = spec.completion_action_text or "#1D74F7"
         self.is_gradient = spec.canvas_brush is not None
 
 
@@ -483,6 +527,13 @@ def app_qss() -> str:
             font-size: 12px;
             font-weight: 600;
         }}
+        QLabel[role="appIcon"] {{
+            background: {t.primary};
+            color: #ffffff;
+            border-radius: 2px;
+            font-size: 8px;
+            font-weight: 700;
+        }}
         QLabel[role="wizardTitle"] {{
             color: {t.text};
             font-size: 12px;
@@ -530,8 +581,8 @@ def app_qss() -> str:
         QTableWidget::item:selected {{
             background: {t.selected_bg};
             color: {t.text};
-            border-top: 1px solid {t.border_focus};
-            border-bottom: 1px solid {t.border_focus};
+            border-top: 1px solid {t.selection_border};
+            border-bottom: 1px solid {t.selection_border};
         }}
         QHeaderView::section {{
             background: {t.table_header_bg};

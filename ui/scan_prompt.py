@@ -16,7 +16,7 @@ class ScanPrompt(QWidget):
     PROGRESS_DURATION_MS = 15000
     PROGRESS_MAX = 1000
     MIN_WIDTH = 380
-    MAX_WIDTH = 550
+    MAX_WIDTH = MIN_WIDTH
     MIN_HEIGHT = 100
     MAX_HEIGHT = 400
     MESSAGE_VERTICAL_OVERHEAD = 76
@@ -45,7 +45,8 @@ class ScanPrompt(QWidget):
         self.progress.setFixedHeight(4)
         layout.addWidget(self.progress)
         self.title = QLabel()
-        self.title.setStyleSheet("font-weight: 700; font-size: 14px; color: #1767DE;")
+        self.title.setProperty("role", "scanPromptTitle")
+        self.title.setStyleSheet("font-weight: 700; font-size: 14px;")
         self.message = QLabel()
         self.message.setWordWrap(True)
         self.message.setMinimumHeight(40)
@@ -85,13 +86,16 @@ class ScanPrompt(QWidget):
             QLabel {{
                 color: {THEME.text};
             }}
+            QLabel[role="scanPromptTitle"] {{
+                color: {THEME.tab_active_text};
+            }}
             QProgressBar {{
                 background: {THEME.disabled_bg};
                 border: 0;
                 border-radius: 2px;
             }}
             QProgressBar::chunk {{
-                background: #1767DE;
+                background: {THEME.primary_brush};
                 border-radius: 2px;
             }}
             """
@@ -193,13 +197,11 @@ class ScanPrompt(QWidget):
 
     def _fit_message(self) -> None:
         metrics = QFontMetrics(self.message.font())
-        longest_line = max(self.message.text().splitlines() or [""], key=len)
-        preferred_width = metrics.horizontalAdvance(longest_line) + 36
-        target_width = max(self.MIN_WIDTH, min(self.MAX_WIDTH, preferred_width))
+        target_width = self.MIN_WIDTH
         content_width = target_width - 36
-        bounds = QFontMetrics(self.message.font()).boundingRect(
+        bounds = metrics.boundingRect(
             QRect(0, 0, content_width, 1000),
-            Qt.TextFlag.TextWordWrap,
+            Qt.TextFlag.TextWordWrap | Qt.TextFlag.TextWrapAnywhere,
             self.message.text(),
         )
         max_message_height = self.MAX_HEIGHT - self.MESSAGE_VERTICAL_OVERHEAD

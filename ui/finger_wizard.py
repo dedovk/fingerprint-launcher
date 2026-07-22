@@ -118,7 +118,7 @@ class CurrentPageStack(QStackedWidget):
         app_icon = QLabel("FL")
         app_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         app_icon.setFixedSize(16, 16)
-        app_icon.setStyleSheet("background:#1D74F7;color:white;border-radius:2px;font-size:8px;font-weight:700;")
+        app_icon.setProperty("role", "appIcon")
         layout.addWidget(app_icon)
         self.title = QLabel(title)
         self.title.setProperty("role", "wizardTitle")
@@ -157,7 +157,7 @@ class CleanWizardTitleBar(QFrame):
         app_icon = QLabel("FL")
         app_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         app_icon.setFixedSize(16, 16)
-        app_icon.setStyleSheet("background:#1D74F7;color:white;border-radius:2px;font-size:8px;font-weight:700;")
+        app_icon.setProperty("role", "appIcon")
         layout.addWidget(app_icon)
         self.title = QLabel(title)
         self.title.setProperty("role", "wizardTitle")
@@ -1119,6 +1119,7 @@ class FingerWizard(QDialog):
         saved_text = saved_text.replace(
             "<b>", f"<b style='color:{THEME.strong_text}'>"
         )
+        saved_text = saved_text.replace("#1D74F7", THEME.completion_action_text)
         self.done_label.setText(saved_text)
 
     def _load_existing(self, finger: dict) -> None:

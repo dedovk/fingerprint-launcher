@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from threading import Event
+from typing import Any, Callable
 
 
 class CommandCancelledError(RuntimeError):
@@ -25,9 +26,18 @@ class CancellationToken:
         return self._event.wait(max(0.0, timeout))
 
 
+TimerScheduler = Callable[[dict[str, Any]], None]
+
+
 class ExecutionContext:
-    def __init__(self, token: CancellationToken | None = None) -> None:
+    def __init__(
+        self,
+        token: CancellationToken | None = None,
+        timer_scheduler: TimerScheduler | None = None,
+    ) -> None:
         self.token = token or CancellationToken()
+        self.timer_scheduler = timer_scheduler
+        self.command_metadata: dict[str, Any] = {}
 
     def check_cancelled(self) -> None:
         if self.token.is_cancelled:
@@ -37,3 +47,9 @@ class ExecutionContext:
         self.check_cancelled()
         if seconds > 0 and self.token.wait(seconds):
             raise CommandCancelledError("Action execution was cancelled")
+
+    def schedule_timer(self, data: dict[str, Any]) -> None:
+        self.check_cancelled()
+        if self.timer_scheduler is None:
+            raise RuntimeError("Timer service is unavailable")
+        self.timer_scheduler({**dict(data), **self.command_metadata})

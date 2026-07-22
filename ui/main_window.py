@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime
+import ctypes
+import ctypes.wintypes
 import json
 import re
 import urllib.error
 import urllib.request
 
-from PyQt6.QtCore import QPropertyAnimation, QObject, QRect, QRectF, QSize, Qt, QThread, QTimer, QUrl, QVariantAnimation, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, QObject, QRect, QRectF, QSize, Qt, QThread, QTimer, QUrl, QVariantAnimation, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QBrush, QColor, QDesktopServices, QFont, QPainter, QPalette, QPen
 from PyQt6.QtWidgets import (
     QApplication,
@@ -36,6 +38,7 @@ from PyQt6.QtWidgets import (
 from core.action_registry import format_action_summary
 from core.database import Database
 from services.autostart import remove_user_autostart, setup_user_autostart
+from services.timer_manager import TimerManager
 from ui.finger_wizard import FingerWizard, HotkeyEdit
 from ui.i18n import LANGUAGES, action_labels, tr
 from ui.scan_prompt import ScanPrompt
@@ -48,6 +51,7 @@ from ui.theme import (
     prepare_combo_popup,
 )
 from ui.triggered_scan import TriggeredFingerprintScan
+from core.time_utils import format_countdown, format_duration_ms
 
 
 APP_VERSION = "1.0.0"
@@ -171,7 +175,8 @@ class TitleBar(QFrame):
         self.min_btn.setProperty("iconName", "minimize_main_window")
         self.min_btn.setIconSize(QSize(12, 12))
         self.min_btn.setProperty("role", "wizardWindowButton" if wizard else "windowButton")
-        self.min_btn.clicked.connect(parent.showMinimized)
+        minimize = getattr(parent, "animate_minimize", parent.showMinimized)
+        self.min_btn.clicked.connect(minimize)
         layout.addWidget(self.min_btn)
 
         if not wizard:
@@ -500,17 +505,34 @@ class MainWindow(QMainWindow):
         self._update_status_kwargs: dict[str, str] = {}
         self._swatch_animations: dict[QPushButton, QVariantAnimation] = {}
         self.hotkey_handle = None
-        self.scan_prompt = ScanPrompt(self.lang)
+        self.scan_prompt = ScanPrompt(self.lang, self)
+        self.timer_notification = ScanPrompt(self.lang, self)
         self.allow_close = False
+        self._minimize_animation: QParallelAnimationGroup | None = None
+        self._minimize_restore_geometry = QRect()
+        self._native_minimize_passthrough = False
         self._resize_margin = 8
         self._resize_edges: set[str] = set()
         self._resize_start_pos = None
         self._resize_start_geometry = QRect()
         self._activity_entries: list[tuple[str, str]] = []
+        self._fingers_cache: dict[int, dict] = {}
+        self._active_timers: list[dict] = []
+        self.hotkey_paused = False
+        self.timer_manager = TimerManager(self)
+        self.timer_manager.timers_changed.connect(self._on_timers_changed)
+        self.timer_manager.timer_started.connect(self._on_timer_started)
+        self.timer_manager.timer_finished.connect(self._on_timer_finished)
+        self.timer_manager.timer_cancelled.connect(self._on_timer_cancelled)
         self.activation_requested.connect(self.start_triggered_scan)
 
         self.setWindowTitle("FingerprintLauncher")
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowSystemMenuHint
+            | Qt.WindowType.WindowMinimizeButtonHint
+        )
         self.resize(780, 830)
         self.setMinimumSize(780, 830)
         self.setStyleSheet(app_qss())
@@ -836,7 +858,7 @@ class MainWindow(QMainWindow):
         self.activation_title.setFixedHeight(44)
         self.activation_hotkey_label = QLabel()
         self.activation_hotkey_label.setProperty("role", "fieldLabel")
-        self.activation_hotkey_input = HotkeyEdit(capture_only=True, require_modifier=True)
+        self.activation_hotkey_input = HotkeyEdit(capture_only=True)
         self.activation_hotkey_input.setProperty("role", "mono")
         self.activation_hotkey_input.setFixedHeight(42)
         self.activation_hotkey_input.setText(self.activation_hotkey())
@@ -1075,6 +1097,8 @@ class MainWindow(QMainWindow):
                     "enabled": bool(item.get("enabled", 1)),
                 })
 
+        self._fingers_cache = fingers_dict
+
         for index, finger in enumerate(fingers_dict.values(), start=1):
             row = self.fingers_table.rowCount()
             self.fingers_table.insertRow(row)
@@ -1103,8 +1127,87 @@ class MainWindow(QMainWindow):
             command_item.setFont(QFont(THEME.mono_font, 10))
             command_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
             self.fingers_table.setItem(row, 3, command_item)
-            first_cmd = finger["commands"][0] if finger["commands"] else None
-            self.fingers_table.setItem(row, 4, self._status_item(first_cmd))
+            commands = finger["commands"]
+            sequence_enabled = bool(commands) and all(
+                command.get("enabled", False) for command in commands
+            )
+            self.fingers_table.setItem(
+                row,
+                4,
+                self._status_item(sequence_enabled, int(finger["id"])),
+            )
+
+        self._render_timer_countdowns()
+
+    def _on_timers_changed(self, timers: list[dict]) -> None:
+        self._active_timers = list(timers)
+        self._render_timer_countdowns()
+
+    def _render_timer_countdowns(self) -> None:
+        if not hasattr(self, "fingers_table"):
+            return
+        labels = action_labels(self.lang)
+        timers_by_command: dict[int, list[dict]] = {}
+        for timer in self._active_timers:
+            command_id = timer.get("command_id")
+            if command_id is not None:
+                timers_by_command.setdefault(int(command_id), []).append(timer)
+
+        for row in range(self.fingers_table.rowCount()):
+            finger_item = self.fingers_table.item(row, 1)
+            if finger_item is None:
+                continue
+            finger_id = int(finger_item.data(Qt.ItemDataRole.UserRole))
+            finger = self._fingers_cache.get(finger_id, {})
+            summaries: list[str] = []
+            for command in finger.get("commands", []):
+                command_timers = sorted(
+                    timers_by_command.get(int(command.get("command_id") or -1), []),
+                    key=lambda item: item.get("remaining_ms", 0),
+                )
+                if command["command_type"] == "quick_timer" and command_timers:
+                    remaining = format_countdown(command_timers[0]["remaining_ms"])
+                    summary = tr(self.lang, "timer_remaining").format(remaining=remaining)
+                    if len(command_timers) > 1:
+                        summary += " · " + tr(self.lang, "timer_more").format(
+                            count=len(command_timers) - 1
+                        )
+                else:
+                    summary = format_action_summary(
+                        command["command_type"],
+                        command.get("command_data"),
+                        labels.get(command["command_type"], command["command_type"]),
+                    )
+                if summary:
+                    summaries.append(summary)
+            item = self.fingers_table.item(row, 3)
+            if item is not None:
+                item.setText(" | ".join(summaries))
+
+    def _timer_display_name(self, timer: dict) -> str:
+        return str(timer.get("message") or tr(self.lang, "quick_timer"))
+
+    def _on_timer_started(self, timer: dict) -> None:
+        message = tr(self.lang, "timer_started").format(
+            duration=format_duration_ms(int(timer["duration_ms"]))
+        )
+        title = self._timer_display_name(timer)
+        self._append_activity(f"{message} · {title}")
+
+    def _on_timer_finished(self, timer: dict) -> None:
+        message = f"{tr(self.lang, 'timer_finished')}: {self._timer_display_name(timer)}"
+        self.last_activity.setText(message)
+        self._append_activity(message)
+        self._set_status_detail("success", message)
+        self.timer_notification.show_notification(
+            tr(self.lang, "timer_finished"),
+            self._timer_display_name(timer),
+        )
+
+    def _on_timer_cancelled(self, timer: dict) -> None:
+        self._append_activity(
+            f"{tr(self.lang, 'timer_cancelled')}: {self._timer_display_name(timer)}"
+        )
 
     def _set_status_detail(self, mode: str, message: str) -> None:
         self._last_status_mode = mode
@@ -1165,13 +1268,12 @@ class MainWindow(QMainWindow):
             if index < len(entries) - 1:
                 self.activity_log_rows_layout.addWidget(_separator())
 
-    def _status_item(self, command: dict | None) -> QTableWidgetItem:
-        enabled = bool(command.get("enabled")) if command else False
+    def _status_item(self, enabled: bool, finger_id: int) -> QTableWidgetItem:
         item = QTableWidgetItem(tr(self.lang, "enabled") if enabled else tr(self.lang, "disabled"))
         item.setIcon(icon("active_action" if enabled else "inactive_action"))
         item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         item.setForeground(QBrush(QColor(THEME.success if enabled else THEME.danger)))
-        item.setData(Qt.ItemDataRole.UserRole, command.get("command_id") if command else None)
+        item.setData(Qt.ItemDataRole.UserRole, finger_id)
         item.setData(Qt.ItemDataRole.UserRole + 1, enabled)
         return item
 
@@ -1181,11 +1283,11 @@ class MainWindow(QMainWindow):
         item = self.fingers_table.item(row, column)
         if item is None:
             return
-        command_id = item.data(Qt.ItemDataRole.UserRole)
-        if command_id is None:
+        finger_id = item.data(Qt.ItemDataRole.UserRole)
+        if finger_id is None:
             return
         enabled = not bool(item.data(Qt.ItemDataRole.UserRole + 1))
-        self.db.set_command_enabled(int(command_id), enabled)
+        self.db.set_finger_commands_enabled(int(finger_id), enabled)
         self.refresh_fingers()
 
     @staticmethod
@@ -1193,6 +1295,10 @@ class MainWindow(QMainWindow):
         button.setFixedWidth(max(minimum_width, button.sizeHint().width()))
 
     def refresh_status(self) -> None:
+        if self.hotkey_paused:
+            self.monitor_status.setText(tr(self.lang, "hotkey_paused"))
+            self.hotkey_chip.setText("")
+            return
         self.monitor_status.setText(tr(self.lang, "hotkey_status").split("{hotkey}")[0].format(hotkey="").rstrip(": ") + ":")
         self.hotkey_chip.setText(self.activation_hotkey())
 
@@ -1230,9 +1336,15 @@ class MainWindow(QMainWindow):
         return hotkey if self._is_valid_activation_hotkey(hotkey) else "ctrl+alt+f"
 
     def _is_valid_activation_hotkey(self, hotkey: str) -> bool:
-        parts = set(HotkeyEdit.normalize_hotkey(hotkey).split("+"))
-        primary_modifiers = {"ctrl", "alt", "windows"}
-        return bool(parts & primary_modifiers) and len(parts - primary_modifiers - {"shift"}) >= 1
+        normalized = HotkeyEdit.normalize_hotkey(hotkey)
+        if not normalized:
+            return False
+        try:
+            import keyboard
+            keyboard.parse_hotkey(normalized)
+        except (TypeError, ValueError):
+            return False
+        return True
 
     def save_activation_hotkey(self) -> None:
         hotkey = HotkeyEdit.normalize_hotkey(self.activation_hotkey_input.text().strip())
@@ -1246,6 +1358,8 @@ class MainWindow(QMainWindow):
 
     def register_activation_hotkey(self) -> None:
         self.unregister_activation_hotkey()
+        if self.hotkey_paused:
+            return
         hotkey = self.activation_hotkey()
         try:
             import keyboard
@@ -1266,23 +1380,63 @@ class MainWindow(QMainWindow):
             pass
         self.hotkey_handle = None
 
-    def start_triggered_scan(self) -> None:
-        if self.scan_thread is not None and self.scan_thread.isRunning():
+    def set_hotkey_paused(self, paused: bool) -> None:
+        paused = bool(paused)
+        if self.hotkey_paused == paused:
             return
+        self.hotkey_paused = paused
+        if paused:
+            self.unregister_activation_hotkey()
+            if self.scan_worker is not None:
+                self.scan_worker.cancel()
+            self.scan_prompt.hide()
+            message = tr(self.lang, "hotkey_paused")
+            self.last_activity.setText(message)
+            self._append_activity(message)
+            self._set_status_detail("warning", message)
+        else:
+            self.register_activation_hotkey()
+            self._set_status_detail("", "")
+        self.refresh_status()
+
+    def start_triggered_scan(self) -> None:
+        if self.hotkey_paused:
+            return
+        if self.scan_thread is not None:
+            if self.scan_thread.isRunning():
+                return
+            self._scan_thread_finished(self.scan_thread, self.scan_worker)
         self._scan_had_action_results = False
         self.scan_prompt.show_prompt(self.lang)
         self.last_activity.setText(tr(self.lang, "scan_popup_waiting"))
         self._append_activity(_status_text(self.lang, "scan_started"))
-        self.scan_thread = QThread(self)
-        self.scan_worker = TriggeredFingerprintScan(self.db.path, self.lang)
-        self.scan_worker.moveToThread(self.scan_thread)
-        self.scan_thread.started.connect(self.scan_worker.run)
-        self.scan_worker.activity.connect(self.on_scan_activity)
-        self.scan_worker.action_result.connect(self.on_scan_action_result)
-        self.scan_worker.error.connect(self.on_scan_error)
-        self.scan_worker.finished.connect(self.scan_thread.quit)
-        self.scan_thread.finished.connect(self._scan_thread_finished)
-        self.scan_thread.start()
+        thread = QThread(self)
+        worker = TriggeredFingerprintScan(
+            self.db.path,
+            self.lang,
+            timer_scheduler=self.timer_manager.request_timer,
+        )
+        self.scan_thread = thread
+        self.scan_worker = worker
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.matched.connect(self.on_scan_matched)
+        worker.activity.connect(self.on_scan_activity)
+        worker.action_result.connect(self.on_scan_action_result)
+        worker.error.connect(self.on_scan_error)
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(
+            lambda current_thread=thread, current_worker=worker:
+            self._scan_thread_finished(current_thread, current_worker)
+        )
+        thread.start()
+
+    def on_scan_matched(self, _finger_name: str) -> None:
+        message = tr(self.lang, "scan_recognized")
+        self.last_activity.setText(message)
+        self.scan_prompt.set_result(message)
+        self.scan_prompt.close_later()
 
     def on_scan_action_result(self, result: dict) -> None:
         self._scan_had_action_results = True
@@ -1300,14 +1454,31 @@ class MainWindow(QMainWindow):
             entry = f"{tr(self.lang, 'action_result_failed')}: {label}"
         self._append_activity(entry)
 
-    def _scan_thread_finished(self) -> None:
+    def _scan_thread_finished(
+        self,
+        thread: QThread | None,
+        _worker: TriggeredFingerprintScan | None,
+    ) -> None:
+        if thread is None:
+            return
+        if self.scan_thread is thread:
+            self.scan_thread = None
+            self.scan_worker = None
+        thread.deleteLater()
+
+    def _stop_scan_thread(self, timeout_ms: int = 17_000) -> None:
         worker = self.scan_worker
         thread = self.scan_thread
-        self.scan_worker = None
-        self.scan_thread = None
         if worker is not None:
-            worker.deleteLater()
-        if thread is not None:
+            worker.cancel()
+        if thread is None:
+            return
+        thread.quit()
+        if thread.isRunning():
+            thread.wait(timeout_ms)
+        if not thread.isRunning() and self.scan_thread is thread:
+            self.scan_thread = None
+            self.scan_worker = None
             thread.deleteLater()
 
     def on_scan_activity(self, message: str) -> None:
@@ -1488,6 +1659,7 @@ class MainWindow(QMainWindow):
         self._render_activity_log()
         self.refresh_fingers()
         self.scan_prompt.apply_theme()
+        self.timer_notification.apply_theme()
         self.update()
 
     def _animate_swatch(self, button: ThemeSwatch, target_size: int) -> None:
@@ -1512,28 +1684,113 @@ class MainWindow(QMainWindow):
         self.change_theme_key(theme_key)
 
     def show_settings(self) -> None:
+        self.set_tab(2)
+        self._cancel_minimize_animation()
         self.show()
+        if self.isMinimized():
+            self.showNormal()
         self.raise_()
         self.activateWindow()
 
+    def toggle_taskbar_visibility(self) -> None:
+        if self.isHidden() or self.isMinimized():
+            self._cancel_minimize_animation()
+            self.showNormal()
+            self.raise_()
+            self.activateWindow()
+        else:
+            self.animate_minimize()
+
+    def animate_minimize(self) -> None:
+        if self.isMinimized() or self._minimize_animation is not None:
+            return
+        app = QApplication.instance()
+        if app is None or app.platformName() == "offscreen":
+            self.showMinimized()
+            return
+
+        self._minimize_restore_geometry = QRect(self.geometry())
+        target = QRect(self._minimize_restore_geometry)
+        target.translate(0, 18)
+
+        group = QParallelAnimationGroup(self)
+        geometry_animation = QPropertyAnimation(self, b"geometry", group)
+        geometry_animation.setDuration(180)
+        geometry_animation.setStartValue(self._minimize_restore_geometry)
+        geometry_animation.setEndValue(target)
+        geometry_animation.setEasingCurve(QEasingCurve.Type.InCubic)
+        opacity_animation = QPropertyAnimation(self, b"windowOpacity", group)
+        opacity_animation.setDuration(180)
+        opacity_animation.setStartValue(self.windowOpacity())
+        opacity_animation.setEndValue(0.08)
+        opacity_animation.setEasingCurve(QEasingCurve.Type.InCubic)
+        group.finished.connect(self._finish_animated_minimize)
+        self._minimize_animation = group
+        group.start()
+
+    def _finish_animated_minimize(self) -> None:
+        group = self._minimize_animation
+        self._minimize_animation = None
+        self.setUpdatesEnabled(False)
+        if not self._minimize_restore_geometry.isNull():
+            self.setGeometry(self._minimize_restore_geometry)
+        self._native_minimize_passthrough = True
+        self.showMinimized()
+        QTimer.singleShot(120, self._finish_native_minimize_passthrough)
+        self.setWindowOpacity(1.0)
+        self.setUpdatesEnabled(True)
+        self._minimize_restore_geometry = QRect()
+        if group is not None:
+            group.deleteLater()
+
+    def _finish_native_minimize_passthrough(self) -> None:
+        self._native_minimize_passthrough = False
+
+    def _cancel_minimize_animation(self) -> None:
+        group = self._minimize_animation
+        if group is not None:
+            group.stop()
+            group.deleteLater()
+            self._minimize_animation = None
+            if not self._minimize_restore_geometry.isNull() and not self.isMinimized():
+                self.setGeometry(self._minimize_restore_geometry)
+            self._minimize_restore_geometry = QRect()
+        self.setWindowOpacity(1.0)
+
+    def nativeEvent(self, event_type, message):  # type: ignore[override]
+        try:
+            event_name = bytes(event_type).decode("ascii")
+        except (TypeError, ValueError, UnicodeDecodeError):
+            event_name = str(event_type)
+        if event_name in {"windows_generic_MSG", "windows_dispatcher_MSG"}:
+            try:
+                msg = ctypes.wintypes.MSG.from_address(int(message))
+                if msg.message == 0x0112 and int(msg.wParam) & 0xFFF0 == 0xF020:
+                    if self._native_minimize_passthrough:
+                        return False, 0
+                    QTimer.singleShot(0, self.animate_minimize)
+                    return True, 0
+            except (TypeError, ValueError, OSError):
+                pass
+        return False, 0
+
     def shutdown(self) -> None:
+        self.prepare_for_exit()
+        self.close()
+
+    def prepare_for_exit(self) -> None:
         self.allow_close = True
         self.unregister_activation_hotkey()
-        if self.scan_worker is not None:
-            self.scan_worker.cancel()
+        self._stop_scan_thread()
+        self.scan_prompt.hide()
+        self.timer_notification.hide()
         if self.update_thread is not None and self.update_thread.isRunning():
             self.update_thread.quit()
             self.update_thread.wait(12000)
-        self.close()
 
     def closeEvent(self, event) -> None:
         if self.allow_close:
-            self.unregister_activation_hotkey()
-            if self.scan_worker is not None:
-                self.scan_worker.cancel()
-            if self.update_thread is not None and self.update_thread.isRunning():
-                self.update_thread.quit()
-                self.update_thread.wait(12000)
+            self.prepare_for_exit()
             super().closeEvent(event)
             return
         event.ignore()

@@ -1,5 +1,7 @@
 from types import SimpleNamespace
+from unittest.mock import patch
 
+from core.action_runner import ActionStatus
 from core.winbio import S_OK, WINBIO_E_BAD_CAPTURE
 from ui.i18n import (
     BIOMETRIC_TRANSLATIONS,
@@ -54,7 +56,20 @@ def test_dynamic_settings_messages_are_translated_for_every_language():
         "executed",
         "settings_menu",
         "scan_popup_waiting",
+        "scan_recognized",
         "timeout",
+        "delay",
+        "quick_timer",
+        "pause_hotkey",
+        "resume_hotkey",
+        "hotkey_paused",
+        "active_timers",
+        "no_active_timers",
+        "cancel_timer",
+        "cancel_all_timers",
+        "timer_started",
+        "timer_finished",
+        "timer_cancelled",
     }
 
     for language in set(LANGUAGES) - {"en"}:
@@ -66,6 +81,40 @@ def test_tray_settings_label_has_no_ellipsis_in_any_language():
     for language in LANGUAGES:
         assert "..." not in tr(language, "settings_menu")
         assert "…" not in tr(language, "settings_menu")
+
+
+def test_triggered_scan_emits_match_before_running_actions(tmp_path):
+    events = []
+
+    class MatchDatabase:
+        def update_guid(self, *_args):
+            pass
+
+        def get_commands(self, *_args):
+            return [{"command_type": "lock_screen", "command_data": {}}]
+
+    class RecordingRunner:
+        def __init__(self, **_kwargs):
+            pass
+
+        def run(self, _commands):
+            events.append("runner")
+            return SimpleNamespace(status=ActionStatus.SUCCESS, results=())
+
+    worker = TriggeredFingerprintScan(tmp_path / "matched.sqlite3", lang="en")
+    worker.matched.connect(lambda _name: events.append("matched"))
+    result = SimpleNamespace(
+        hr=S_OK,
+        guid="guid",
+        identity_value="guid",
+        identity_type=2,
+        sub_factor=0xF9,
+    )
+
+    with patch("ui.triggered_scan.ActionRunner", RecordingRunner):
+        worker._dispatch_match(MatchDatabase(), result)
+
+    assert events == ["matched", "runner"]
 
 
 def test_triggered_scan_localizes_system_finger_name(tmp_path):

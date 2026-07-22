@@ -72,7 +72,70 @@ class Database:
         )
         if self._has_unique_sub_factor_constraint():
             self._rebuild_fingers_without_unique_sub_factor()
+        self._migrate_implicit_action_delays()
         self._migrate_command_data()
+
+    def _migrate_implicit_action_delays(self) -> None:
+        """Turn legacy per-action delays into explicit sequence actions."""
+        rows = self._conn.execute(
+            """
+            SELECT id, finger_id, command_type, command_data, enabled
+            FROM commands
+            ORDER BY finger_id, id
+            """
+        ).fetchall()
+        by_finger: dict[int, list[sqlite3.Row]] = {}
+        for row in rows:
+            by_finger.setdefault(int(row["finger_id"]), []).append(row)
+
+        for finger_id, commands in by_finger.items():
+            migrated: list[dict[str, Any]] = []
+            changed = False
+            for row in commands:
+                try:
+                    decoded = json.loads(row["command_data"])
+                except (json.JSONDecodeError, TypeError):
+                    decoded = {}
+                data = dict(decoded) if isinstance(decoded, dict) else {}
+                has_legacy_delay = "delay_before" in data or "delay_after" in data
+                if not has_legacy_delay:
+                    migrated.append({
+                        "command_type": row["command_type"],
+                        "command_data": data,
+                        "enabled": bool(row["enabled"]),
+                    })
+                    continue
+
+                changed = True
+                before_ms = self._legacy_delay_ms(data.pop("delay_before", 0))
+                after_ms = self._legacy_delay_ms(data.pop("delay_after", 0))
+                enabled = bool(row["enabled"])
+                if before_ms:
+                    migrated.append({
+                        "command_type": "delay",
+                        "command_data": {"schema_version": 1, "duration_ms": before_ms},
+                        "enabled": enabled,
+                    })
+                migrated.append({
+                    "command_type": row["command_type"],
+                    "command_data": data,
+                    "enabled": enabled,
+                })
+                if after_ms:
+                    migrated.append({
+                        "command_type": "delay",
+                        "command_data": {"schema_version": 1, "duration_ms": after_ms},
+                        "enabled": enabled,
+                    })
+
+            if changed:
+                self.replace_commands(finger_id, migrated)
+
+    @staticmethod
+    def _legacy_delay_ms(value: Any) -> int:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return 0
+        return max(0, round(float(value) * 1_000))
 
     def _migrate_command_data(self) -> None:
         rows = self._conn.execute(
@@ -354,6 +417,14 @@ class Database:
         self._conn.execute(
             "UPDATE commands SET enabled = ? WHERE id = ?",
             (int(enabled), command_id),
+        )
+        self._conn.commit()
+
+    def set_finger_commands_enabled(self, finger_id: int, enabled: bool) -> None:
+        """Enable or disable the complete action sequence assigned to a finger."""
+        self._conn.execute(
+            "UPDATE commands SET enabled = ? WHERE finger_id = ?",
+            (int(enabled), finger_id),
         )
         self._conn.commit()
 

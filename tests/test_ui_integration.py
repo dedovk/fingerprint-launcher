@@ -1,15 +1,21 @@
 import os
-from unittest.mock import patch
+import ctypes
+import ctypes.wintypes
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import Qt, QThread, QTimer
+from PyQt6.QtGui import QIcon
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
 from core.database import Database
-from ui.finger_wizard import FingerWizard
+from ui.finger_wizard import FingerWizard, HotkeyEdit
 from ui.i18n import tr
 from ui.main_window import MainWindow
 from ui.theme import THEME
+from ui.tray import FingerprintTray
 
 
 def _app() -> QApplication:
@@ -35,8 +41,6 @@ def test_wizard_picker_and_registry_data_integrate_without_resizing(tmp_path):
         assert wizard.actions[0]["command_type"] == "sleep"
         assert wizard.actions[0]["command_data"] == {
             "schema_version": 1,
-            "delay_before": 0.0,
-            "delay_after": 0.0,
         }
 
 
@@ -56,6 +60,86 @@ def test_data_free_action_uses_compact_layout_after_value_action(tmp_path):
         assert wizard.height() == 560
 
 
+def test_wizard_builds_delay_and_normalizes_quick_timer_units(tmp_path):
+    app = _app()
+    with Database(tmp_path / "timer-wizard.sqlite3") as db:
+        wizard = FingerWizard(db, lang="en")
+        wizard.stack.setCurrentIndex(1)
+
+        wizard.action_type.setCurrentIndex(wizard.action_type.findData("delay"))
+        wizard.delay_value.setText("1500")
+        wizard.delay_unit.setCurrentIndex(wizard.delay_unit.findData("milliseconds"))
+        wizard._add_action()
+        assert wizard.actions[0]["command_data"]["duration_ms"] == 1_500
+
+        wizard.action_type.setCurrentIndex(wizard.action_type.findData("quick_timer"))
+        wizard.timer_value.setText("120")
+        wizard.timer_unit.setCurrentIndex(wizard.timer_unit.findData("minutes"))
+        wizard.timer_message.setText("Tea")
+        wizard._add_action()
+
+        timer_data = wizard.actions[1]["command_data"]
+        assert timer_data["duration_ms"] == 7_200_000
+        assert timer_data["message"] == "Tea"
+        assert wizard.timer_value.text() == "2"
+        assert wizard.timer_unit.currentData() == "hours"
+
+        wizard.show()
+        app.processEvents()
+        card_bottom = (
+            wizard.action_card.geometry().y()
+            + wizard.action_card.geometry().height()
+        )
+        title_bottom = (
+            wizard.actions_title.geometry().y()
+            + wizard.actions_title.geometry().height()
+        )
+        assert wizard.actions_title.geometry().top() - card_bottom >= 8
+        assert wizard.actions_scroll.geometry().top() - title_bottom >= 8
+        assert "background: transparent" in wizard.timer_editor.styleSheet()
+        sound_bottom = (
+            wizard.timer_sound.geometry().y()
+            + wizard.timer_sound.geometry().height()
+        )
+        assert sound_bottom <= wizard.timer_editor.height()
+        wizard.deleteLater()
+        app.processEvents()
+
+
+def test_duration_editor_limits_follow_selected_units(tmp_path):
+    app = _app()
+    with Database(tmp_path / "duration-limits.sqlite3") as db:
+        wizard = FingerWizard(db, lang="en")
+        wizard.delay_unit.setCurrentIndex(wizard.delay_unit.findData("hours"))
+        assert wizard.delay_value.validator().top() == 24
+        wizard.timer_unit.setCurrentIndex(wizard.timer_unit.findData("hours"))
+        assert wizard.timer_value.validator().top() == 720
+        wizard.deleteLater()
+        app.processEvents()
+
+
+def test_hotkey_edit_accepts_single_and_modifier_keys():
+    app = _app()
+    hotkey = HotkeyEdit(capture_only=True)
+    hotkey.show()
+
+    QTest.keyClick(hotkey, Qt.Key.Key_F8)
+    assert hotkey.text() == "f8"
+
+    QTest.keyClick(hotkey, Qt.Key.Key_A)
+    assert hotkey.text() == "a"
+
+    QTest.keyPress(hotkey, Qt.Key.Key_Control)
+    assert hotkey.text() == "ctrl"
+    QTest.keyRelease(hotkey, Qt.Key.Key_Control)
+
+    QTest.keyClick(hotkey, Qt.Key.Key_Plus)
+    assert hotkey.text() == "plus"
+
+    hotkey.deleteLater()
+    app.processEvents()
+
+
 def test_edit_launch_app_keeps_file_picker_and_stable_controls_width(tmp_path):
     app = _app()
     with Database(tmp_path / "edit-launch-app.sqlite3") as db:
@@ -68,8 +152,6 @@ def test_edit_launch_app_keeps_file_picker_and_stable_controls_width(tmp_path):
                     "schema_version": 1,
                     "path": "C:/Windows/System32/calc.exe",
                     "args": "",
-                    "delay_before": 0.0,
-                    "delay_after": 0.0,
                 },
             }
         ]
@@ -116,6 +198,239 @@ def test_main_window_formats_registry_actions(tmp_path):
         window.scan_prompt.hide()
         window.deleteLater()
         app.processEvents()
+
+
+def test_timer_countdown_replaces_only_the_running_timer_summary(tmp_path):
+    app = _app()
+    with Database(tmp_path / "countdown.sqlite3") as db:
+        finger_id = db.save_finger("guid", 3, "Finger")
+        timer_id = db.save_command(
+            finger_id,
+            "quick_timer",
+            {"duration_ms": 60_000, "message": "Tea", "sound_path": ""},
+        )
+        db.save_command(finger_id, "lock_screen", {})
+        with patch("keyboard.add_hotkey", return_value=object()):
+            window = MainWindow(db)
+
+        window.timer_manager._schedule({
+            "duration_ms": 60_000,
+            "message": "Tea",
+            "command_id": timer_id,
+            "finger_id": finger_id,
+        })
+        app.processEvents()
+        command_text = window.fingers_table.item(0, 3).text()
+        assert "01:00" in command_text
+        assert tr(window.lang, "lock_screen") in command_text
+
+        window.timer_manager.cancel_all()
+        window.scan_prompt.hide()
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_activity_toggle_disables_the_complete_finger_sequence(tmp_path):
+    app = _app()
+    with Database(tmp_path / "sequence-toggle.sqlite3") as db:
+        finger_id = db.save_finger("guid", 3, "Finger")
+        db.save_command(finger_id, "delay", {"duration_ms": 1_000})
+        db.save_command(finger_id, "open_url", {"url": "https://example.com"})
+        with patch("keyboard.add_hotkey", return_value=object()):
+            window = MainWindow(db)
+
+        window._on_fingers_cell_clicked(0, 4)
+
+        assert db.get_commands("guid", 3) == []
+        assert [
+            command["enabled"]
+            for command in db.get_commands_by_finger_id(finger_id)
+        ] == [False, False]
+        assert window.fingers_table.item(0, 4).data(
+            Qt.ItemDataRole.UserRole + 1
+        ) is False
+
+        window._on_fingers_cell_clicked(0, 4)
+
+        assert len(db.get_commands("guid", 3)) == 2
+        assert all(
+            command["enabled"]
+            for command in db.get_commands_by_finger_id(finger_id)
+        )
+
+        window.scan_prompt.hide()
+        window.timer_notification.hide()
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_timer_completion_shows_a_separate_localized_notification(tmp_path):
+    app = _app()
+    with Database(tmp_path / "timer-notification.sqlite3") as db, \
+            patch("keyboard.add_hotkey", return_value=object()):
+        window = MainWindow(db)
+        timer = {"message": "Tea", "duration_ms": 1_000}
+
+        window._on_timer_finished(timer)
+        app.processEvents()
+
+        assert window.timer_notification.isVisible()
+        assert window.timer_notification.title.text() == tr(window.lang, "timer_finished")
+        assert window.timer_notification.message.text() == "Tea"
+        assert window.timer_notification.progress.isHidden()
+
+        window.timer_notification.hide()
+        window.scan_prompt.hide()
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_scan_match_completes_prompt_before_action_sequence_finishes(tmp_path):
+    app = _app()
+    with Database(tmp_path / "scan-match.sqlite3") as db, \
+            patch("keyboard.add_hotkey", return_value=object()):
+        window = MainWindow(db)
+        window.scan_prompt.show_prompt(window.lang)
+        window.scan_prompt.progress.setValue(360)
+
+        window.on_scan_matched("Finger")
+        app.processEvents()
+
+        assert window.scan_prompt.progress.value() == 360
+        assert window.scan_prompt.message.text() == tr(window.lang, "scan_recognized")
+        assert window.scan_prompt._close_timer.isActive()
+
+        window.scan_prompt.hide()
+        window.timer_notification.hide()
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_pause_and_taskbar_toggle_are_reversible(tmp_path):
+    app = _app()
+    with Database(tmp_path / "pause-toggle.sqlite3") as db, \
+            patch("keyboard.add_hotkey", return_value="handle") as add_hotkey, \
+            patch("keyboard.remove_hotkey") as remove_hotkey:
+        window = MainWindow(db)
+        window.set_hotkey_paused(True)
+        assert window.hotkey_paused
+        assert window.hotkey_handle is None
+        assert window.monitor_status.text() == tr(window.lang, "hotkey_paused")
+        remove_hotkey.assert_called_with("handle")
+
+        window.set_hotkey_paused(False)
+        assert not window.hotkey_paused
+        assert window.hotkey_handle == "handle"
+        assert add_hotkey.call_count >= 2
+
+        assert window._is_valid_activation_hotkey("a")
+        assert window._is_valid_activation_hotkey("f8")
+        assert window._is_valid_activation_hotkey("ctrl")
+        assert window._is_valid_activation_hotkey("ctrl+\\")
+        assert not window._is_valid_activation_hotkey("")
+
+        add_hotkey.reset_mock()
+        window.activation_hotkey_input.setText("f8")
+        window.save_activation_hotkey()
+        add_hotkey.assert_called_once()
+        assert add_hotkey.call_args.args[0] == "f8"
+        assert db.get_setting("activation_hotkey") == "f8"
+
+        window.show()
+        app.processEvents()
+        window.toggle_taskbar_visibility()
+        assert window.isMinimized()
+        window.toggle_taskbar_visibility()
+        assert not window.isMinimized()
+
+        window.scan_prompt.hide()
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_native_windows_message_passthrough_is_safe(tmp_path):
+    app = _app()
+    with Database(tmp_path / "native-event.sqlite3") as db, \
+            patch("keyboard.add_hotkey", return_value=object()):
+        window = MainWindow(db)
+        message = ctypes.wintypes.MSG()
+        message.message = 0
+
+        assert window.nativeEvent(
+            b"windows_generic_MSG",
+            ctypes.addressof(message),
+        ) == (False, 0)
+
+        flags = window.windowFlags()
+        assert flags & Qt.WindowType.WindowMinimizeButtonHint
+        assert flags & Qt.WindowType.WindowSystemMenuHint
+
+        message.message = 0x0112  # WM_SYSCOMMAND
+        message.wParam = 0xF020  # SC_MINIMIZE
+        with patch.object(QTimer, "singleShot") as single_shot:
+            assert window.nativeEvent(
+                b"windows_generic_MSG",
+                ctypes.addressof(message),
+            ) == (True, 0)
+        single_shot.assert_called_once()
+        assert single_shot.call_args.args[1] == window.animate_minimize
+
+        window._native_minimize_passthrough = True
+        assert window.nativeEvent(
+            b"windows_generic_MSG",
+            ctypes.addressof(message),
+        ) == (False, 0)
+
+        window.scan_prompt.hide()
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_prepare_for_exit_stops_an_active_scan_thread(tmp_path):
+    app = _app()
+    with Database(tmp_path / "thread-cleanup.sqlite3") as db, \
+            patch("keyboard.add_hotkey", return_value=object()), \
+            patch("keyboard.remove_hotkey"):
+        window = MainWindow(db)
+        worker = Mock()
+        thread = QThread(window)
+        window.scan_worker = worker
+        window.scan_thread = thread
+        thread.start()
+        app.processEvents()
+
+        window.prepare_for_exit()
+
+        worker.cancel.assert_called_once_with()
+        assert not thread.isRunning()
+        assert window.scan_thread is None
+        assert window.scan_worker is None
+
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_tray_exposes_localized_pause_and_live_timer_menu():
+    app = _app()
+    tray = FingerprintTray(QIcon(), lang="en")
+    from services.timer_manager import TimerManager
+
+    manager = TimerManager()
+    tray.bind_timer_manager(manager)
+    tray.set_paused(True)
+    assert tray.pause_action.isChecked()
+    assert tray.pause_action.text() == tr("en", "resume_hotkey")
+
+    manager._schedule({"duration_ms": 60_000, "message": "Tea"})
+    app.processEvents()
+    assert len(tray._timer_actions) == 1
+    assert "Tea" in next(iter(tray._timer_actions.values())).text()
+    assert "01:00" in next(iter(tray._timer_actions.values())).text()
+
+    manager.cancel_all()
+    tray.deleteLater()
+    manager.deleteLater()
+    app.processEvents()
 
 
 def test_main_window_applies_and_switches_dark_theme(tmp_path):
@@ -253,7 +568,16 @@ def test_language_change_retranslates_dynamic_text_and_fits_buttons(tmp_path):
         window.scan_prompt.set_result(tr("ru", "unknown_hello"))
         assert window.scan_prompt.message.height() > 40
         assert window.scan_prompt.height() > short_prompt_height
+        window.scan_prompt.set_result("Very long diagnostic message " * 200)
+        assert window.scan_prompt.height() <= window.scan_prompt.MAX_HEIGHT
+        assert window.scan_prompt.layout().minimumSize().height() <= window.scan_prompt.MAX_HEIGHT
+        with patch("ui.scan_prompt.monotonic", side_effect=(100.0, 107.5)):
+            window.scan_prompt._start_progress()
+            window.scan_prompt._progress_timer.stop()
+            window.scan_prompt._advance_progress()
+        assert window.scan_prompt.progress.value() == window.scan_prompt.PROGRESS_MAX // 2
         window.scan_prompt.set_result("timeout", complete=True)
+        QTest.qWait(300)
         assert window.scan_prompt.progress.value() == window.scan_prompt.PROGRESS_MAX
 
         window.scan_prompt.hide()

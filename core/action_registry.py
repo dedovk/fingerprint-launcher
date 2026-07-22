@@ -5,9 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
+from core.time_utils import format_duration_ms
+
 
 ACTION_SCHEMA_VERSION = 1
-MAX_ACTION_DELAY_SECONDS = 24 * 60 * 60
+MAX_DELAY_DURATION_MS = 24 * 60 * 60 * 1_000
+MAX_TIMER_DURATION_MS = 30 * 24 * 60 * 60 * 1_000
 
 
 class ActionRegistryError(ValueError):
@@ -23,6 +26,7 @@ class ActionValidationError(ActionRegistryError):
 
 
 Validator = Callable[[dict[str, Any]], None]
+SummaryFormatter = Callable[[dict[str, Any], str], str]
 
 
 def _require_string(field_name: str) -> Validator:
@@ -46,6 +50,40 @@ def _validate_shell(data: dict[str, Any]) -> None:
         raise ActionValidationError("hidden must be a boolean")
 
 
+def _validate_duration(field_name: str, maximum_ms: int) -> Validator:
+    def validate(data: dict[str, Any]) -> None:
+        value = data.get(field_name)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ActionValidationError(f"{field_name} must be an integer")
+        if not 1 <= value <= maximum_ms:
+            raise ActionValidationError(
+                f"{field_name} must be between 1 and {maximum_ms} milliseconds"
+            )
+
+    return validate
+
+
+def _validate_quick_timer(data: dict[str, Any]) -> None:
+    _validate_duration("duration_ms", MAX_TIMER_DURATION_MS)(data)
+    if not isinstance(data.get("message", ""), str):
+        raise ActionValidationError("message must be a string")
+    if not isinstance(data.get("sound_path", ""), str):
+        raise ActionValidationError("sound_path must be a string")
+
+
+def _duration_summary(data: dict[str, Any], fallback: str) -> str:
+    duration_ms = data.get("duration_ms")
+    if isinstance(duration_ms, int) and not isinstance(duration_ms, bool):
+        return format_duration_ms(duration_ms)
+    return fallback
+
+
+def _timer_summary(data: dict[str, Any], fallback: str) -> str:
+    duration = _duration_summary(data, fallback)
+    message = str(data.get("message") or "").strip()
+    return f"{duration} - {message}" if message else duration
+
+
 @dataclass(frozen=True)
 class ActionDefinition:
     command_type: str
@@ -56,6 +94,7 @@ class ActionDefinition:
     defaults: Mapping[str, Any] = field(default_factory=dict)
     keywords: tuple[str, ...] = ()
     validator: Validator | None = None
+    summary_formatter: SummaryFormatter | None = None
 
     @property
     def requires_value(self) -> bool:
@@ -64,8 +103,6 @@ class ActionDefinition:
     def build_data(self, value: str = "") -> dict[str, Any]:
         data: dict[str, Any] = {
             "schema_version": ACTION_SCHEMA_VERSION,
-            "delay_before": 0.0,
-            "delay_after": 0.0,
             **dict(self.defaults),
         }
         if self.value_field is not None:
@@ -77,8 +114,6 @@ class ActionDefinition:
         normalized["schema_version"] = _normalize_schema_version(
             normalized.get("schema_version")
         )
-        normalized.setdefault("delay_before", 0.0)
-        normalized.setdefault("delay_after", 0.0)
         for key, value in self.defaults.items():
             normalized.setdefault(key, value)
         return normalized
@@ -89,13 +124,14 @@ class ActionDefinition:
             raise ActionValidationError(
                 f"Unsupported action schema version: {normalized['schema_version']}"
             )
-        _validate_delays(normalized)
         if self.validator is not None:
             self.validator(normalized)
         return normalized
 
     def summary(self, data: Any, fallback_label: str) -> str:
         normalized = self.normalize_data(data)
+        if self.summary_formatter is not None:
+            return self.summary_formatter(normalized, fallback_label)
         if self.value_field is not None:
             value = normalized.get(self.value_field)
             if value is not None and str(value).strip():
@@ -107,17 +143,6 @@ def _normalize_schema_version(value: Any) -> int:
     if isinstance(value, int) and not isinstance(value, bool):
         return value
     return ACTION_SCHEMA_VERSION
-
-
-def _validate_delays(data: dict[str, Any]) -> None:
-    for field_name in ("delay_before", "delay_after"):
-        value = data.get(field_name, 0.0)
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ActionValidationError(f"{field_name} must be a number")
-        if not 0 <= float(value) <= MAX_ACTION_DELAY_SECONDS:
-            raise ActionValidationError(
-                f"{field_name} must be between 0 and {MAX_ACTION_DELAY_SECONDS} seconds"
-            )
 
 
 ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
@@ -191,6 +216,32 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ),
         validator=_require_string("text"),
     ),
+    ActionDefinition(
+        "delay", "delay", "macros", editor="duration",
+        defaults={"duration_ms": 1_000},
+        keywords=(
+            "delay", "wait", "pause", "milliseconds", "seconds", "minutes", "hours",
+            "затримка", "чекати", "пауза", "мілісекунди", "секунди", "хвилини", "години",
+            "задержка", "ждать", "миллисекунды", "секунды", "минуты", "часы",
+            "délai", "attendre", "pause", "millisecondes", "secondes", "minutes", "heures",
+            "retraso", "esperar", "pausa", "milisegundos", "segundos", "minutos", "horas",
+        ),
+        validator=_validate_duration("duration_ms", MAX_DELAY_DURATION_MS),
+        summary_formatter=_duration_summary,
+    ),
+    ActionDefinition(
+        "quick_timer", "quick_timer", "macros", editor="timer",
+        defaults={"duration_ms": 60_000, "message": "", "sound_path": ""},
+        keywords=(
+            "timer", "reminder", "alarm", "countdown",
+            "таймер", "нагадування", "відлік",
+            "таймер", "напоминание", "отсчёт",
+            "minuteur", "rappel", "compte à rebours",
+            "temporizador", "recordatorio", "cuenta atrás",
+        ),
+        validator=_validate_quick_timer,
+        summary_formatter=_timer_summary,
+    ),
 )
 
 
@@ -214,8 +265,6 @@ def normalize_command_data(command_type: str, data: Any) -> dict[str, Any]:
     normalized["schema_version"] = _normalize_schema_version(
         normalized.get("schema_version")
     )
-    normalized.setdefault("delay_before", 0.0)
-    normalized.setdefault("delay_after", 0.0)
     return normalized
 
 

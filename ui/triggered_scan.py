@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
 from loguru import logger
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
@@ -34,14 +35,21 @@ _IDENTIFY_TIMEOUT_MS = 15000
 
 class TriggeredFingerprintScan(QObject):
     activity = pyqtSignal(str)
+    matched = pyqtSignal(str)
     action_result = pyqtSignal(dict)
     error = pyqtSignal(str)
     finished = pyqtSignal()
 
-    def __init__(self, db_path: str | Path, lang: str = "uk") -> None:
+    def __init__(
+        self,
+        db_path: str | Path,
+        lang: str = "uk",
+        timer_scheduler: Callable[[dict], None] | None = None,
+    ) -> None:
         super().__init__()
         self.db_path = Path(db_path)
         self.lang = lang
+        self.timer_scheduler = timer_scheduler
         self._session: WinBioSession | None = None
         self._runner: ActionRunner | None = None
         self._cancelled = False
@@ -54,7 +62,7 @@ class TriggeredFingerprintScan(QObject):
                 acquire_focus()
             except WinBioError as exc:
                 if exc.hr == E_ACCESSDENIED:
-                    logger.debug(
+                    logger.trace(
                         f"WinBioAcquireFocus denied for triggered scan: {exc}")
                 else:
                     logger.warning(
@@ -151,9 +159,12 @@ class TriggeredFingerprintScan(QObject):
                 f"{tr(self.lang, 'no_action')}: {finger_name} ({key})")
             return
 
+        self.matched.emit(finger_name)
+
         self._runner = ActionRunner(
             error_policy=ErrorPolicy.CONTINUE,
             on_result=self._emit_action_result,
+            timer_scheduler=self.timer_scheduler,
         )
         report = self._runner.run(commands)
         self._runner = None

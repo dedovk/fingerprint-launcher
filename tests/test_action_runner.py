@@ -77,16 +77,24 @@ def test_disabled_action_is_skipped():
     assert report.results[0].status == ActionStatus.SKIPPED
 
 
-def test_before_and_after_delays_wrap_execution():
+def test_explicit_delay_keeps_sequence_order_visible():
     events = []
-    runner = ActionRunner(executor=lambda *_: events.append("execute"))
-    runner.context.sleep = lambda seconds: events.append(seconds)
+
+    def executor(command, context):
+        if command["command_type"] == "delay":
+            context.sleep(command["command_data"]["duration_ms"] / 1_000)
+        else:
+            events.append(command["command_type"])
+
+    runner = ActionRunner(executor=executor)
+    runner.context.sleep = lambda seconds: events.append(("delay", seconds))
 
     runner.run([
-        _command("sleep", {"delay_before": 1.5, "delay_after": 2.0}),
+        _command("delay", {"duration_ms": 1_500}),
+        _command("sleep"),
     ])
 
-    assert events == [1.5, "execute", 2.0]
+    assert events == [("delay", 1.5), "sleep"]
 
 
 def test_cancellation_interrupts_a_long_running_handler():
@@ -115,3 +123,26 @@ def test_invalid_and_unknown_actions_return_failed_results():
         ActionStatus.FAILED,
         ActionStatus.FAILED,
     ]
+
+
+def test_runner_passes_command_identity_to_timer_scheduler():
+    scheduled = []
+    report = ActionRunner(timer_scheduler=scheduled.append).run([
+        {
+            "id": 42,
+            "finger_id": 5,
+            "label": "Index",
+            "command_type": "quick_timer",
+            "command_data": {
+                "duration_ms": 60_000,
+                "message": "Tea",
+                "sound_path": "",
+            },
+            "enabled": True,
+        }
+    ])
+
+    assert report.successful
+    assert scheduled[0]["command_id"] == 42
+    assert scheduled[0]["finger_id"] == 5
+    assert scheduled[0]["finger_label"] == "Index"

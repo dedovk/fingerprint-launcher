@@ -125,6 +125,25 @@ def test_command_enabled_can_be_toggled(tmp_path):
         assert db.get_command("guid-1", 0x03) is not None
 
 
+def test_complete_finger_sequence_can_be_toggled_atomically(tmp_path):
+    with Database(tmp_path / "sequence-enabled.sqlite3") as db:
+        finger_id = db.save_finger("guid-1", 0x03, "finger")
+        db.save_command(finger_id, "delay", {"duration_ms": 1_000})
+        db.save_command(finger_id, "open_url", {"url": "https://example.com"})
+
+        db.set_finger_commands_enabled(finger_id, False)
+
+        stored = db.get_commands_by_finger_id(finger_id)
+        assert [command["enabled"] for command in stored] == [False, False]
+        assert db.get_commands("guid-1", 0x03) == []
+
+        db.set_finger_commands_enabled(finger_id, True)
+
+        stored = db.get_commands_by_finger_id(finger_id)
+        assert [command["enabled"] for command in stored] == [True, True]
+        assert len(db.get_commands("guid-1", 0x03)) == 2
+
+
 def test_replace_commands_removes_deleted_actions(tmp_path):
     with Database(tmp_path / "test.sqlite3") as db:
         finger_id = db.save_finger("guid-1", 0x03, "finger")
@@ -167,8 +186,6 @@ def test_replace_commands_accepts_type_alias_and_bad_data(tmp_path):
         assert commands[1]["command_type"] == "lock_screen"
         assert commands[1]["command_data"] == {
             "schema_version": 1,
-            "delay_before": 0.0,
-            "delay_after": 0.0,
         }
 
 
@@ -188,9 +205,37 @@ def test_corrupted_command_json_is_repaired_during_migration(tmp_path):
 
     assert commands[0]["command_data"] == {
         "schema_version": 1,
-        "delay_before": 0.0,
-        "delay_after": 0.0,
     }
+
+
+def test_legacy_action_delays_are_migrated_to_explicit_actions(tmp_path):
+    db_path = tmp_path / "legacy-delays.sqlite3"
+    with Database(db_path) as db:
+        finger_id = db.save_finger("guid-1", 0x03, "finger")
+        db.save_command(
+            finger_id,
+            "open_url",
+            {
+                "url": "https://example.com",
+                "delay_before": 1.5,
+                "delay_after": 2,
+            },
+        )
+
+    with Database(db_path) as db:
+        commands = db.get_commands_by_finger_id(finger_id)
+
+    assert [command["command_type"] for command in commands] == [
+        "delay",
+        "open_url",
+        "delay",
+    ]
+    assert commands[0]["command_data"]["duration_ms"] == 1_500
+    assert commands[1]["command_data"] == {
+        "schema_version": 1,
+        "url": "https://example.com",
+    }
+    assert commands[2]["command_data"]["duration_ms"] == 2_000
 
 
 def test_get_commands_by_finger_id_returns_all_attached_commands(tmp_path):

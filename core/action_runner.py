@@ -8,7 +8,7 @@ from time import perf_counter
 from typing import Any, Callable, Iterable
 
 from core.action_registry import format_action_summary, validate_command_data
-from core.execution import CancellationToken, CommandCancelledError, ExecutionContext
+from core.execution import CancellationToken, CommandCancelledError, ExecutionContext, TimerScheduler
 from core.executor import execute_command
 
 
@@ -76,10 +76,11 @@ class ActionRunner:
         token: CancellationToken | None = None,
         executor: Executor | None = None,
         on_result: ResultCallback | None = None,
+        timer_scheduler: TimerScheduler | None = None,
     ) -> None:
         self.error_policy = error_policy
         self.token = token or CancellationToken()
-        self.context = ExecutionContext(self.token)
+        self.context = ExecutionContext(self.token, timer_scheduler=timer_scheduler)
         self.executor = executor or _default_executor
         self.on_result = on_result
 
@@ -113,10 +114,13 @@ class ActionRunner:
 
             try:
                 data = validate_command_data(command_type, command.get("command_data"))
-                self.context.sleep(float(data.get("delay_before", 0.0)))
+                self.context.command_metadata = {
+                    "command_id": command.get("id"),
+                    "finger_id": command.get("finger_id"),
+                    "finger_label": command.get("label", ""),
+                }
                 command["command_data"] = data
                 self.executor(command, self.context)
-                self.context.sleep(float(data.get("delay_after", 0.0)))
                 result = self._result(
                     index,
                     command_type,

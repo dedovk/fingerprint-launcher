@@ -18,19 +18,28 @@ from PyQt6.QtWidgets import (
     QScrollArea,
 )
 from PyQt6.QtCore import Qt, QObject, QSize, QThread, QTimer, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QKeySequence, QPixmap
+from PyQt6.QtGui import QIntValidator, QKeySequence, QPixmap
 
 import time
 
 from core.action_registry import (
     ACTION_DEFINITIONS,
     ActionValidationError,
+    MAX_DELAY_DURATION_MS,
+    MAX_TIMER_DURATION_MS,
     build_command_data,
     format_action_summary,
     get_action_definition,
     validate_command_data,
 )
 from core.database import Database
+from core.time_utils import (
+    DELAY_UNITS,
+    TIMER_UNITS,
+    UNIT_TO_MS,
+    duration_to_ms,
+    normalized_value_and_unit,
+)
 from core.winbio import (
     WINBIO_ID_TYPE_GUID,
     WINBIO_POOL_PRIVATE,
@@ -51,18 +60,19 @@ from ui.i18n import (
     localized_winbio_message,
     tr,
 )
-from ui.theme import THEME, app_qss, icon
+from ui.theme import THEME, StableComboBox, app_qss, icon, prepare_combo_popup
 
 
 DATA_FREE_ACTIONS = {
     definition.command_type
     for definition in ACTION_DEFINITIONS
-    if not definition.requires_value
+    if not definition.requires_value and definition.editor == "text"
 }
 WIZARD_WIDTH = 540
 WIZARD_COMPACT_HEIGHT = 427
 WIZARD_ACTION_EMPTY_HEIGHT = 560
 WIZARD_ACTION_HEIGHT = 643
+WIZARD_TIMER_HEIGHT = 731
 WIZARD_ACTION_BUTTON_WIDE = 476
 WIZARD_BROWSE_BUTTON_WIDTH = 126
 WIZARD_CONTROL_GAP = 8
@@ -217,6 +227,7 @@ class HotkeyEdit(QLineEdit):
         int(Qt.Key.Key_NumLock):    "num lock",
         int(Qt.Key.Key_Slash):      "/",
         int(Qt.Key.Key_Backslash):  "\\",
+        int(Qt.Key.Key_Plus):       "plus",
     }
 
     # Standalone modifier keys — ignore presses of these alone.
@@ -224,6 +235,14 @@ class HotkeyEdit(QLineEdit):
         int(Qt.Key.Key_Control), int(Qt.Key.Key_Alt),
         int(Qt.Key.Key_Shift),   int(Qt.Key.Key_Meta),
         int(Qt.Key.Key_AltGr),
+    }
+
+    _MODIFIER_KEY_NAMES: dict[int, str] = {
+        int(Qt.Key.Key_Control): "ctrl",
+        int(Qt.Key.Key_Alt): "alt",
+        int(Qt.Key.Key_Shift): "shift",
+        int(Qt.Key.Key_Meta): "windows",
+        int(Qt.Key.Key_AltGr): "alt gr",
     }
 
     _TOKEN_ALIASES: dict[str, str] = {
@@ -273,19 +292,10 @@ class HotkeyEdit(QLineEdit):
     def keyPressEvent(self, event) -> None:  # type: ignore[override]
         key = int(event.key())
         if key in self._MODIFIER_KEYS:
-            return  # Wait for the actual key alongside the modifier.
-
-        modifiers = event.modifiers()
-        capture_modifiers = (
-            Qt.KeyboardModifier.ControlModifier
-            | Qt.KeyboardModifier.AltModifier
-            | Qt.KeyboardModifier.MetaModifier
-            | Qt.KeyboardModifier.ShiftModifier
-        )
-        if not self.capture_only and not (modifiers & capture_modifiers):
-            super().keyPressEvent(event)
+            self.setText(self._MODIFIER_KEY_NAMES[key])
             return
 
+        modifiers = event.modifiers()
         parts: list[str] = []
         has_primary_modifier = False
         if modifiers & Qt.KeyboardModifier.ControlModifier:
@@ -300,7 +310,7 @@ class HotkeyEdit(QLineEdit):
             parts.append("windows")
             has_primary_modifier = True
 
-        if self.capture_only and self.require_modifier and not has_primary_modifier:
+        if self.require_modifier and not has_primary_modifier:
             return
 
         key_name = self._KEY_MAP.get(key)
@@ -566,6 +576,10 @@ class FingerWizard(QDialog):
         )
         self.action_value_stack.addWidget(self.action_value)
         self.action_value_stack.addWidget(self.hotkey_value)
+        self.duration_editor = self._duration_editor()
+        self.timer_editor = self._timer_editor()
+        self.action_value_stack.addWidget(self.duration_editor)
+        self.action_value_stack.addWidget(self.timer_editor)
         self.action_value_stack.setFixedHeight(42)
 
         self.browse = _wizard_button(tr(self.lang, "choose_file"), "secondary")
@@ -594,9 +608,9 @@ class FingerWizard(QDialog):
         action_card_layout.addLayout(controls_row)
         layout.addWidget(self.action_card)
 
-        actions_title = QLabel(tr(self.lang, "added_actions").upper())
-        actions_title.setProperty("role", "fieldLabel")
-        layout.addWidget(actions_title)
+        self.actions_title = QLabel(tr(self.lang, "added_actions").upper())
+        self.actions_title.setProperty("role", "fieldLabel")
+        layout.addWidget(self.actions_title)
 
         self.actions_scroll = QScrollArea()
         self.actions_scroll.setWidgetResizable(True)
@@ -613,6 +627,98 @@ class FingerWizard(QDialog):
         self._sync_action_fields()
         self._update_actions_display()
         return page
+
+    def _unit_combo(self, units: tuple[str, ...]) -> StableComboBox:
+        combo = StableComboBox()
+        combo.setFixedHeight(42)
+        prepare_combo_popup(combo)
+        for unit in units:
+            combo.addItem(tr(self.lang, f"unit_{unit}"), unit)
+        return combo
+
+    def _duration_editor(self) -> QWidget:
+        editor = QWidget()
+        editor.setObjectName("durationEditor")
+        editor.setStyleSheet(
+            "QWidget#durationEditor { background: transparent; border: 0; }"
+        )
+        row = QHBoxLayout(editor)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        self.delay_value = QLineEdit("1")
+        self.delay_value.setValidator(QIntValidator(1, 86_400_000, self.delay_value))
+        self.delay_value.setFixedHeight(42)
+        self.delay_unit = self._unit_combo(DELAY_UNITS)
+        self.delay_unit.setCurrentIndex(self.delay_unit.findData("seconds"))
+        self.delay_unit.currentIndexChanged.connect(
+            lambda: self._sync_duration_validator(
+                self.delay_value, self.delay_unit, MAX_DELAY_DURATION_MS
+            )
+        )
+        self._sync_duration_validator(
+            self.delay_value, self.delay_unit, MAX_DELAY_DURATION_MS
+        )
+        row.addWidget(self.delay_value, 1)
+        row.addWidget(self.delay_unit, 1)
+        return editor
+
+    def _timer_editor(self) -> QWidget:
+        editor = QWidget()
+        editor.setObjectName("timerEditor")
+        editor.setStyleSheet(
+            "QWidget#timerEditor { background: transparent; border: 0; }"
+        )
+        layout = QVBoxLayout(editor)
+        layout.setContentsMargins(0, 0, 0, 2)
+        layout.setSpacing(6)
+
+        self.timer_duration_label = QLabel(tr(self.lang, "timer_duration").upper())
+        self.timer_duration_label.setProperty("role", "fieldLabel")
+        duration_row = QHBoxLayout()
+        duration_row.setSpacing(8)
+        self.timer_value = QLineEdit("1")
+        self.timer_value.setValidator(QIntValidator(1, 2_592_000, self.timer_value))
+        self.timer_value.setFixedHeight(42)
+        self.timer_unit = self._unit_combo(TIMER_UNITS)
+        self.timer_unit.setCurrentIndex(self.timer_unit.findData("minutes"))
+        self.timer_unit.currentIndexChanged.connect(
+            lambda: self._sync_duration_validator(
+                self.timer_value, self.timer_unit, MAX_TIMER_DURATION_MS
+            )
+        )
+        self._sync_duration_validator(
+            self.timer_value, self.timer_unit, MAX_TIMER_DURATION_MS
+        )
+        duration_row.addWidget(self.timer_value, 1)
+        duration_row.addWidget(self.timer_unit, 1)
+
+        self.timer_message_label = QLabel(tr(self.lang, "timer_message").upper())
+        self.timer_message_label.setProperty("role", "fieldLabel")
+        self.timer_message = QLineEdit()
+        self.timer_message.setPlaceholderText(tr(self.lang, "timer_message_hint"))
+        self.timer_message.setFixedHeight(42)
+
+        self.timer_sound_label = QLabel(tr(self.lang, "timer_sound").upper())
+        self.timer_sound_label.setProperty("role", "fieldLabel")
+        sound_row = QHBoxLayout()
+        sound_row.setSpacing(8)
+        self.timer_sound = QLineEdit()
+        self.timer_sound.setReadOnly(True)
+        self.timer_sound.setPlaceholderText(tr(self.lang, "timer_no_sound"))
+        self.timer_sound.setFixedHeight(36)
+        self.timer_sound_browse = _wizard_button(tr(self.lang, "choose_file"), "secondary")
+        self.timer_sound_browse.setFixedHeight(30)
+        self.timer_sound_browse.clicked.connect(self.choose_timer_sound)
+        sound_row.addWidget(self.timer_sound, 1)
+        sound_row.addWidget(self.timer_sound_browse)
+
+        layout.addWidget(self.timer_duration_label)
+        layout.addLayout(duration_row)
+        layout.addWidget(self.timer_message_label)
+        layout.addWidget(self.timer_message)
+        layout.addWidget(self.timer_sound_label)
+        layout.addLayout(sound_row)
+        return editor
 
     def _done_step(self) -> QWidget:
         page = QWidget()
@@ -717,6 +823,16 @@ class FingerWizard(QDialog):
         if path:
             self.action_value.setText(path)
 
+    def choose_timer_sound(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            tr(self.lang, "choose_sound"),
+            "",
+            "Audio files (*.wav *.mp3 *.ogg *.m4a);;All files (*)",
+        )
+        if path:
+            self.timer_sound.setText(path)
+
     def next_step(self) -> None:
         index = self.stack.currentIndex()
         if index == 0 and not self.scanned:
@@ -752,11 +868,15 @@ class FingerWizard(QDialog):
     def _stack_height_for_index(self, index: int) -> int:
         if index != 1:
             return 277
+        if self._selected_action() == "quick_timer":
+            return 581
         return 410 if self._use_compact_action_page() else 493
 
     def _window_height_for_index(self, index: int) -> int:
         if index != 1:
             return WIZARD_COMPACT_HEIGHT
+        if self._selected_action() == "quick_timer":
+            return WIZARD_TIMER_HEIGHT
         return WIZARD_ACTION_EMPTY_HEIGHT if self._use_compact_action_page() else WIZARD_ACTION_HEIGHT
 
     def _use_compact_action_page(self) -> bool:
@@ -786,15 +906,13 @@ class FingerWizard(QDialog):
             value = HotkeyEdit.normalize_hotkey(
                 self.hotkey_value.text().strip())
             self.hotkey_value.setText(value)
+        elif action in {"delay", "quick_timer"}:
+            value = ""
         else:
             value = self.action_value.text().strip()
-        if not value and action not in DATA_FREE_ACTIONS:
+        if get_action_definition(action).requires_value and not value:
             return
         command_data = self._command_data(action, value)
-        if self.editing_action_index is not None:
-            previous_data = self.actions[self.editing_action_index].get("command_data") or {}
-            command_data["delay_before"] = previous_data.get("delay_before", 0.0)
-            command_data["delay_after"] = previous_data.get("delay_after", 0.0)
         try:
             command_data = validate_command_data(action, command_data)
         except ActionValidationError:
@@ -811,6 +929,8 @@ class FingerWizard(QDialog):
             self._set_add_button_mode()
         self.action_value.clear()
         self.hotkey_value.clear()
+        self.timer_message.clear()
+        self.timer_sound.clear()
         self._update_actions_display()
         self._sync_window_size()
 
@@ -842,7 +962,19 @@ class FingerWizard(QDialog):
         data = action_info.get("command_data") or {}
         definition = get_action_definition(command_type)
         value = data.get(definition.value_field, "") if definition.value_field else ""
-        if command_type == "hotkey":
+        if command_type == "delay":
+            self._load_duration_controls(
+                int(data.get("duration_ms", 1_000)), self.delay_value, self.delay_unit, DELAY_UNITS
+            )
+            self.delay_value.setFocus()
+        elif command_type == "quick_timer":
+            self._load_duration_controls(
+                int(data.get("duration_ms", 60_000)), self.timer_value, self.timer_unit, TIMER_UNITS
+            )
+            self.timer_message.setText(str(data.get("message") or ""))
+            self.timer_sound.setText(str(data.get("sound_path") or ""))
+            self.timer_value.setFocus()
+        elif command_type == "hotkey":
             self.hotkey_value.setText(str(value))
             self.hotkey_value.setFocus()
         else:
@@ -966,21 +1098,66 @@ class FingerWizard(QDialog):
         return str(self.action_type.currentData())
 
     def _command_data(self, action: str, value: str) -> dict:
+        if action == "delay":
+            duration_ms = self._duration_from_controls(self.delay_value, self.delay_unit)
+            self._load_duration_controls(duration_ms, self.delay_value, self.delay_unit, DELAY_UNITS)
+            return {"schema_version": 1, "duration_ms": duration_ms}
+        if action == "quick_timer":
+            duration_ms = self._duration_from_controls(self.timer_value, self.timer_unit)
+            self._load_duration_controls(duration_ms, self.timer_value, self.timer_unit, TIMER_UNITS)
+            return {
+                "schema_version": 1,
+                "duration_ms": duration_ms,
+                "message": self.timer_message.text().strip(),
+                "sound_path": self.timer_sound.text().strip(),
+            }
         return build_command_data(action, value)
+
+    @staticmethod
+    def _duration_from_controls(value: QLineEdit, unit: QComboBox) -> int:
+        amount = int(value.text() or "0")
+        return duration_to_ms(amount, str(unit.currentData()))
+
+    @staticmethod
+    def _sync_duration_validator(
+        value: QLineEdit,
+        unit: QComboBox,
+        maximum_ms: int,
+    ) -> None:
+        factor = UNIT_TO_MS[str(unit.currentData())]
+        value.setValidator(QIntValidator(1, maximum_ms // factor, value))
+
+    @staticmethod
+    def _load_duration_controls(
+        duration_ms: int,
+        value: QLineEdit,
+        unit: QComboBox,
+        units: tuple[str, ...],
+    ) -> None:
+        amount, normalized_unit = normalized_value_and_unit(duration_ms, units)
+        value.setText(str(amount))
+        unit.setCurrentIndex(max(0, unit.findData(normalized_unit)))
 
     def _sync_action_fields(self) -> None:
         action = self._selected_action()
         definition = get_action_definition(action)
-        needs_data = definition.requires_value
+        needs_data = definition.requires_value or definition.editor in {"duration", "timer"}
         browse_active = action == "launch_app"
-        self.action_value_label.setVisible(needs_data)
+        self.action_value_label.setVisible(needs_data and definition.editor != "timer")
         self.action_value_stack.setVisible(needs_data)
         self.browse.setVisible(browse_active)
         self.add_action_btn.setFixedSize(
             self._add_button_width(browse_active),
             30,
         )
-        self.action_card.setFixedHeight(204 if needs_data else 126)
+        if definition.editor == "timer":
+            self.action_value_stack.setFixedHeight(194)
+            self.action_card.setFixedHeight(337)
+            self.actions_scroll.setFixedHeight(106)
+        else:
+            self.action_value_stack.setFixedHeight(42)
+            self.action_card.setFixedHeight(204 if needs_data else 126)
+            self.actions_scroll.setFixedHeight(148)
         self._sync_window_size()
         self.controls_row.setAlignment(
             self.add_action_btn,
@@ -990,7 +1167,15 @@ class FingerWizard(QDialog):
         if definition.editor == "hotkey":
             self.action_value_stack.setCurrentIndex(1)
             self.hotkey_value.setFocus()
+        elif definition.editor == "duration":
+            self.action_value_label.setText(tr(self.lang, "delay_duration").upper())
+            self.action_value_stack.setCurrentIndex(2)
+            self.delay_value.setFocus()
+        elif definition.editor == "timer":
+            self.action_value_stack.setCurrentIndex(3)
+            self.timer_value.setFocus()
         else:
+            self.action_value_label.setText(tr(self.lang, "data").upper())
             self.action_value_stack.setCurrentIndex(0)
 
     def _set_add_button_mode(self) -> None:

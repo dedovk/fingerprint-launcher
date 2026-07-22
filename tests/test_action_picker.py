@@ -17,11 +17,15 @@ def test_picker_contains_all_actions_and_searches_keywords():
     app = _app()
     picker = ActionPicker("uk")
 
-    assert len(picker.filtered_action_ids()) == 8
+    assert len(picker.filtered_action_ids()) == 10
     picker.set_search_text("powershell")
     assert picker.filtered_action_ids() == ["shell"]
     picker.set_search_text("буфер")
     assert picker.filtered_action_ids() == ["paste_text"]
+    picker.set_search_text("temporizador")
+    assert picker.filtered_action_ids() == ["quick_timer"]
+    picker.set_search_text("attendre")
+    assert picker.filtered_action_ids() == ["delay"]
     assert app is not None
 
 

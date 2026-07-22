@@ -150,6 +150,14 @@ def _copy_text_to_clipboard(data: dict[str, Any]) -> None:
     _set_windows_clipboard_text(text)
 
 
+def _delay(data: dict[str, Any], context: ExecutionContext) -> None:
+    context.sleep(int(data["duration_ms"]) / 1_000)
+
+
+def _quick_timer(data: dict[str, Any], context: ExecutionContext) -> None:
+    context.schedule_timer(data)
+
+
 def _set_windows_clipboard_text(text: str) -> None:
     user32 = ctypes.windll.user32
     kernel32 = ctypes.windll.kernel32
@@ -217,4 +225,6 @@ ACTION_HANDLERS = {
     "shutdown": _cancellable(_shutdown_handler),
     "sleep": _cancellable(_sleep_handler),
     "paste_text": _cancellable(_copy_text_to_clipboard),
+    "delay": _delay,
+    "quick_timer": _quick_timer,
 }

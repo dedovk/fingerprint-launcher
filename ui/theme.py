@@ -353,6 +353,8 @@ def prepare_combo_popup(combo: QComboBox) -> None:
 
 def app_qss() -> str:
     t = THEME
+    checkbox_checked_icon = icon_path("checkbox_checked").replace("\\", "/")
+    dropdown_icon = icon_path("dropdown_list").replace("\\", "/")
     return f"""
         QWidget {{
             background: {t.bg};
@@ -409,7 +411,7 @@ def app_qss() -> str:
             width: 34px;
         }}
         QComboBox::down-arrow {{
-            image: url({icon_path("dropdown_list").replace("\\", "/")});
+            image: url({dropdown_icon});
             width: 12px;
             height: 12px;
             margin-right: 12px;
@@ -650,6 +652,6 @@ def app_qss() -> str:
         QCheckBox::indicator:checked {{
             background: {t.primary};
             border-color: {t.primary};
-            image: url({icon_path("checkbox_checked").replace("\\", "/")});
+            image: url({checkbox_checked_icon});
         }}
     """

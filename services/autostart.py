@@ -50,14 +50,14 @@ def remove_user_autostart() -> None:
         pass
 
 
-def bootstrap_distribution() -> list[str]:
+def bootstrap_distribution(*, start_in_tray: bool = False) -> list[str]:
     """Best-effort autostart registration. Failures are non-fatal."""
 
     errors: list[str] = []
     if sys.platform != "win32":
         return errors
     try:
-        setup_user_autostart()
+        setup_user_autostart(start_in_tray=start_in_tray)
     except Exception as exc:
         errors.append(f"Autostart setup failed: {exc}")
     return errors

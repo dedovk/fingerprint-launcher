@@ -10,7 +10,11 @@ def test_missing_autostart_setting_migrates_to_disabled(tmp_path, monkeypatch):
 
     removed = []
     monkeypatch.setattr(app_main, "remove_user_autostart", lambda: removed.append(True))
-    monkeypatch.setattr(app_main, "bootstrap_distribution", lambda: ["unexpected"])
+    monkeypatch.setattr(
+        app_main,
+        "bootstrap_distribution",
+        lambda **_kwargs: ["unexpected"],
+    )
 
     with Database(tmp_path / "autostart-default.sqlite3") as db:
         assert app_main.configure_autostart(db) == []
@@ -24,7 +28,12 @@ def test_explicit_autostart_setting_is_preserved(tmp_path, monkeypatch):
     import main as app_main
     from core.database import Database
 
-    monkeypatch.setattr(app_main, "bootstrap_distribution", lambda: ["setup result"])
+    calls = []
+    monkeypatch.setattr(
+        app_main,
+        "bootstrap_distribution",
+        lambda **kwargs: calls.append(kwargs) or ["setup result"],
+    )
     monkeypatch.setattr(
         app_main,
         "remove_user_autostart",
@@ -35,6 +44,28 @@ def test_explicit_autostart_setting_is_preserved(tmp_path, monkeypatch):
         db.set_setting("autostart", "1")
         assert app_main.configure_autostart(db) == ["setup result"]
         assert db.get_setting("autostart") == "1"
+
+    assert calls == [{"start_in_tray": False}]
+
+
+def test_tray_autostart_mode_is_preserved_during_bootstrap(tmp_path, monkeypatch):
+    import main as app_main
+    from core.database import Database
+
+    calls = []
+    monkeypatch.setattr(
+        app_main,
+        "bootstrap_distribution",
+        lambda **kwargs: calls.append(kwargs) or [],
+    )
+
+    with Database(tmp_path / "autostart-tray.sqlite3") as db:
+        db.set_setting("autostart", "1")
+        db.set_setting("autostart_mode", "current_user_tray")
+
+        assert app_main.configure_autostart(db) == []
+
+    assert calls == [{"start_in_tray": True}]
 
 
 def test_setup_user_autostart_creates_run_value_and_removes_legacy_task(monkeypatch):
@@ -147,3 +178,12 @@ def test_gui_launch_command_uses_executable_in_frozen_build(monkeypatch):
     command = autostart._gui_launch_command()
     assert command == r"C:\App\FingerprintLauncher.exe"
     assert "main.py" not in command
+
+
+def test_gui_launch_command_adds_tray_argument_to_frozen_build(monkeypatch):
+    monkeypatch.setattr(autostart, "_is_frozen", lambda: True)
+    monkeypatch.setattr(autostart.sys, "executable", r"C:\App\FingerprintLauncher.exe")
+
+    command = autostart._gui_launch_command(start_in_tray=True)
+
+    assert command == r"C:\App\FingerprintLauncher.exe --tray"

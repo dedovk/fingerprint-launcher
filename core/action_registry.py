@@ -194,10 +194,30 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         ),
     ),
     ActionDefinition(
+        "minimize_all", "minimize_all", "system",
+        keywords=(
+            "minimize", "all", "windows", "desktop", "show desktop",
+            "згорнути", "усі", "вікна", "робочий стіл",
+            "свернуть", "все", "окна", "рабочий стол",
+            "réduire", "toutes", "fenêtres", "bureau",
+            "minimizar", "todas", "ventanas", "escritorio",
+        ),
+    ),
+    ActionDefinition(
         "shutdown", "shutdown", "system",
         keywords=(
             "shutdown", "power", "off", "вимкнути", "комп'ютер", "выключить", "компьютер",
             "éteindre", "arrêt", "ordinateur", "apagar", "equipo", "ordenador",
+        ),
+    ),
+    ActionDefinition(
+        "restart", "restart", "system",
+        keywords=(
+            "restart", "reboot", "computer", "windows",
+            "перезавантаження", "перезавантажити", "комп'ютер",
+            "перезагрузка", "перезагрузить", "компьютер",
+            "redémarrer", "redémarrage", "ordinateur",
+            "reiniciar", "reinicio", "equipo", "ordenador",
         ),
     ),
     ActionDefinition(

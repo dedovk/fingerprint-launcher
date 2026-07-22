@@ -20,7 +20,9 @@ def test_registry_contains_all_existing_actions_in_original_order():
         "hotkey",
         "shell",
         "lock_screen",
+        "minimize_all",
         "shutdown",
+        "restart",
         "sleep",
         "paste_text",
         "delay",
@@ -88,3 +90,19 @@ def test_clipboard_action_has_accurate_name_in_all_languages():
     assert action_labels("ru")["paste_text"] == "Копирование текста в буфер обмена"
     assert action_labels("fr")["paste_text"] == "Copier le texte dans le presse-papiers"
     assert action_labels("es")["paste_text"] == "Copiar texto al portapapeles"
+
+
+@pytest.mark.parametrize(
+    ("language", "restart", "minimize_all"),
+    [
+        ("uk", "Перезавантаження", "Згорнути всі вікна"),
+        ("en", "Restart computer", "Minimize all windows"),
+        ("ru", "Перезагрузка", "Свернуть все окна"),
+        ("fr", "Redémarrer l'ordinateur", "Réduire toutes les fenêtres"),
+        ("es", "Reiniciar el equipo", "Minimizar todas las ventanas"),
+    ],
+)
+def test_new_system_actions_are_translated(language, restart, minimize_all):
+    labels = action_labels(language)
+    assert labels["restart"] == restart
+    assert labels["minimize_all"] == minimize_all

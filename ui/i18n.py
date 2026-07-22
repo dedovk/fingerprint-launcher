@@ -49,7 +49,8 @@ UK = {
     "saved": "Для пальця <b>{label}</b> призначено дію: <span style='color:#1D74F7'>{action}</span>",
     "launch_app": "Відкрити програму або файл", "open_url": "Відкрити сайт", "hotkey": "Натиснути гарячу клавішу",
     "shell": "Виконати команду PowerShell", "lock_screen": "Заблокувати екран",
-    "shutdown": "Вимкнути комп'ютер", "sleep": "Режим сну", "paste_text": "Копіювання тексту в буфер обміну",
+    "minimize_all": "Згорнути всі вікна", "shutdown": "Вимкнути комп'ютер",
+    "restart": "Перезавантаження", "sleep": "Режим сну", "paste_text": "Копіювання тексту в буфер обміну",
 }
 
 
@@ -88,7 +89,8 @@ EN = {
     "saved": "Finger <b>{label}</b> now runs: <span style='color:#1D74F7'>{action}</span>",
     "launch_app": "Open app or file", "open_url": "Open website", "hotkey": "Press hotkey",
     "shell": "Run PowerShell command", "lock_screen": "Lock screen",
-    "shutdown": "Shut down computer", "sleep": "Sleep mode", "paste_text": "Copy text to clipboard",
+    "minimize_all": "Minimize all windows", "shutdown": "Shut down computer",
+    "restart": "Restart computer", "sleep": "Sleep mode", "paste_text": "Copy text to clipboard",
 }
 
 
@@ -119,7 +121,8 @@ RU = {
     "saved": "Для пальца <b>{label}</b> назначено действие: <span style='color:#1D74F7'>{action}</span>",
     "launch_app": "Открыть программу или файл", "open_url": "Открыть сайт", "hotkey": "Нажать горячую клавишу",
     "shell": "Выполнить команду PowerShell", "lock_screen": "Заблокировать экран",
-    "shutdown": "Выключить компьютер", "sleep": "Режим сна", "paste_text": "Копирование текста в буфер обмена",
+    "minimize_all": "Свернуть все окна", "shutdown": "Выключить компьютер",
+    "restart": "Перезагрузка", "sleep": "Режим сна", "paste_text": "Копирование текста в буфер обмена",
 }
 
 
@@ -142,7 +145,8 @@ FR = {
     "data": "Données", "choose_file": "Choisir un fichier",
     "launch_app": "Ouvrir une app ou un fichier", "open_url": "Ouvrir un site", "hotkey": "Appuyer sur un raccourci",
     "shell": "Exécuter une commande PowerShell", "lock_screen": "Verrouiller l'écran",
-    "shutdown": "Éteindre l'ordinateur", "sleep": "Mode veille", "paste_text": "Copier le texte dans le presse-papiers",
+    "minimize_all": "Réduire toutes les fenêtres", "shutdown": "Éteindre l'ordinateur",
+    "restart": "Redémarrer l'ordinateur", "sleep": "Mode veille", "paste_text": "Copier le texte dans le presse-papiers",
 }
 
 
@@ -165,7 +169,8 @@ ES = {
     "data": "Datos", "choose_file": "Elegir archivo",
     "launch_app": "Abrir app o archivo", "open_url": "Abrir sitio web", "hotkey": "Pulsar atajo",
     "shell": "Ejecutar comando PowerShell", "lock_screen": "Bloquear pantalla",
-    "shutdown": "Apagar el equipo", "sleep": "Modo suspensión", "paste_text": "Copiar texto al portapapeles",
+    "minimize_all": "Minimizar todas las ventanas", "shutdown": "Apagar el equipo",
+    "restart": "Reiniciar el equipo", "sleep": "Modo suspensión", "paste_text": "Copiar texto al portapapeles",
 }
 
 

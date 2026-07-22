@@ -127,6 +127,28 @@ def _shutdown_handler(_data: dict[str, Any]) -> None:
     _shutdown()
 
 
+def _restart() -> None:
+    if sys.platform != "win32":
+        raise CommandExecutionError("restart is only available on Windows")
+    subprocess.Popen(["shutdown.exe", "/r", "/t", "0"], creationflags=CREATE_NO_WINDOW)
+
+
+def _restart_handler(_data: dict[str, Any]) -> None:
+    _restart()
+
+
+def _minimize_all() -> None:
+    if sys.platform != "win32":
+        raise CommandExecutionError("minimize_all is only available on Windows")
+    import keyboard
+
+    keyboard.send("windows+m")
+
+
+def _minimize_all_handler(_data: dict[str, Any]) -> None:
+    _minimize_all()
+
+
 def _sleep() -> None:
     if sys.platform != "win32":
         raise CommandExecutionError("sleep is only available on Windows")
@@ -222,7 +244,9 @@ ACTION_HANDLERS = {
     "hotkey": _cancellable(_hotkey),
     "shell": _cancellable(_shell),
     "lock_screen": _cancellable(_lock_screen_handler),
+    "minimize_all": _cancellable(_minimize_all_handler),
     "shutdown": _cancellable(_shutdown_handler),
+    "restart": _cancellable(_restart_handler),
     "sleep": _cancellable(_sleep_handler),
     "paste_text": _cancellable(_copy_text_to_clipboard),
     "delay": _delay,

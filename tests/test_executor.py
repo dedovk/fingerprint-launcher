@@ -49,6 +49,24 @@ def test_shutdown_uses_windows_shutdown(monkeypatch):
     assert "creationflags" in popen.call_args.kwargs
 
 
+def test_restart_uses_windows_restart(monkeypatch):
+    monkeypatch.setattr("sys.platform", "win32")
+    with patch("subprocess.Popen") as popen:
+        execute_command({"command_type": "restart", "command_data": {}})
+
+    popen.assert_called_once()
+    assert popen.call_args.args[0] == ["shutdown.exe", "/r", "/t", "0"]
+    assert "creationflags" in popen.call_args.kwargs
+
+
+def test_minimize_all_sends_windows_m(monkeypatch):
+    monkeypatch.setattr("sys.platform", "win32")
+    with patch("keyboard.send") as send:
+        execute_command({"command_type": "minimize_all", "command_data": {}})
+
+    send.assert_called_once_with("windows+m")
+
+
 def test_sleep_uses_windows_suspend_command(monkeypatch):
     monkeypatch.setattr("sys.platform", "win32")
     with patch("subprocess.Popen") as popen:

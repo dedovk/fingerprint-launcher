@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from time import monotonic
+
 from PyQt6.QtCore import QRect, Qt, QTimer
 from PyQt6.QtGui import QFontMetrics
 from PyQt6.QtWidgets import QApplication, QLabel, QProgressBar, QSizePolicy, QVBoxLayout, QWidget
@@ -13,19 +15,24 @@ from ui.theme import THEME
 class ScanPrompt(QWidget):
     PROGRESS_DURATION_MS = 15000
     PROGRESS_MAX = 1000
+    MIN_WIDTH = 380
+    MAX_WIDTH = 550
+    MIN_HEIGHT = 100
+    MAX_HEIGHT = 400
+    MESSAGE_VERTICAL_OVERHEAD = 76
 
-    def __init__(self, lang: str = "uk") -> None:
+    def __init__(self, lang: str = "uk", parent: QWidget | None = None) -> None:
         super().__init__(
-            None,
+            parent,
             Qt.WindowType.Window
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.CustomizeWindowHint,
         )
         self.lang = lang
         self.setWindowTitle("FingerprintLauncher")
-        self.setMinimumSize(380, 100)
-        self.setMaximumSize(550, 400)
-        self.resize(380, 100)
+        self.setMinimumSize(self.MIN_WIDTH, self.MIN_HEIGHT)
+        self.setMaximumSize(self.MAX_WIDTH, self.MAX_HEIGHT)
+        self.resize(self.MIN_WIDTH, self.MIN_HEIGHT)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
 
         layout = QVBoxLayout(self)
@@ -47,10 +54,17 @@ class ScanPrompt(QWidget):
         layout.addStretch()
 
         self.apply_theme()
-        self._progress_elapsed = 0
+        self._progress_started_at: float | None = None
         self._progress_timer = QTimer(self)
         self._progress_timer.setInterval(50)
         self._progress_timer.timeout.connect(self._advance_progress)
+        self._progress_completing = False
+        self._progress_completion_started_at = 0.0
+        self._progress_completion_duration_ms = 0
+        self._progress_completion_start_value = 0
+        self._close_timer = QTimer(self)
+        self._close_timer.setSingleShot(True)
+        self._close_timer.timeout.connect(self.hide)
         self.set_waiting(lang)
 
     def apply_theme(self) -> None:
@@ -90,7 +104,9 @@ class ScanPrompt(QWidget):
     def set_result(self, text: str, complete: bool = False) -> None:
         self._progress_timer.stop()
         if complete:
-            self.progress.setValue(self.PROGRESS_MAX)
+            self._finish_progress_smoothly()
+        else:
+            self._progress_completing = False
         self.title.setText(tr(self.lang, "scan_popup_title"))
         self.message.setText(text)
         self._fit_message()
@@ -98,6 +114,8 @@ class ScanPrompt(QWidget):
             self._move_to_bottom_right()
 
     def show_prompt(self, lang: str) -> None:
+        self._close_timer.stop()
+        self.progress.show()
         self.set_waiting(lang)
         self._start_progress()
         self._move_to_bottom_right()
@@ -106,38 +124,90 @@ class ScanPrompt(QWidget):
         self.activateWindow()
 
     def close_later(self, ms: int = 1400) -> None:
-        QTimer.singleShot(ms, self.hide)
+        self._close_timer.start(ms)
+
+    def show_notification(self, title: str, message: str, ms: int = 5000) -> None:
+        self._progress_timer.stop()
+        self._progress_completing = False
+        self._close_timer.stop()
+        self.progress.hide()
+        self.title.setText(title)
+        self.message.setText(message)
+        self._fit_message()
+        self._move_to_bottom_right()
+        self.show()
+        self.raise_()
+        self.close_later(ms)
 
     def hide(self) -> None:  # type: ignore[override]
         self._progress_timer.stop()
+        self._progress_completing = False
+        self._close_timer.stop()
         super().hide()
 
     def _start_progress(self) -> None:
-        self._progress_elapsed = 0
+        self._progress_completing = False
+        self._progress_started_at = monotonic()
         self.progress.setValue(0)
         self._progress_timer.start()
 
     def _advance_progress(self) -> None:
-        self._progress_elapsed += self._progress_timer.interval()
+        if self._progress_completing:
+            elapsed_ms = (monotonic() - self._progress_completion_started_at) * 1000
+            fraction = min(1.0, elapsed_ms / self._progress_completion_duration_ms)
+            eased = 1.0 - (1.0 - fraction) ** 3
+            remaining = self.PROGRESS_MAX - self._progress_completion_start_value
+            self.progress.setValue(
+                self._progress_completion_start_value + int(remaining * eased)
+            )
+            if fraction >= 1.0:
+                self.progress.setValue(self.PROGRESS_MAX)
+                self._progress_completing = False
+                self._progress_timer.stop()
+            return
+        if self._progress_started_at is None:
+            return
+        elapsed_ms = (monotonic() - self._progress_started_at) * 1000
         value = min(
             self.PROGRESS_MAX,
-            int(self.PROGRESS_MAX * self._progress_elapsed / self.PROGRESS_DURATION_MS),
+            int(self.PROGRESS_MAX * elapsed_ms / self.PROGRESS_DURATION_MS),
         )
         self.progress.setValue(value)
         if value >= self.PROGRESS_MAX:
             self._progress_timer.stop()
 
+    def _finish_progress_smoothly(self) -> None:
+        current = self.progress.value()
+        if current >= self.PROGRESS_MAX:
+            return
+        remaining_ratio = (self.PROGRESS_MAX - current) / self.PROGRESS_MAX
+        self._progress_completion_start_value = current
+        self._progress_completion_duration_ms = max(
+            90, min(260, int(260 * remaining_ratio))
+        )
+        self._progress_completion_started_at = monotonic()
+        self._progress_completing = True
+        self._progress_timer.start()
+
     def _fit_message(self) -> None:
-        content_width = max(344, self.width() - 36)
+        metrics = QFontMetrics(self.message.font())
+        longest_line = max(self.message.text().splitlines() or [""], key=len)
+        preferred_width = metrics.horizontalAdvance(longest_line) + 36
+        target_width = max(self.MIN_WIDTH, min(self.MAX_WIDTH, preferred_width))
+        content_width = target_width - 36
         bounds = QFontMetrics(self.message.font()).boundingRect(
             QRect(0, 0, content_width, 1000),
             Qt.TextFlag.TextWordWrap,
             self.message.text(),
         )
-        message_height = max(40, bounds.height() + 4)
+        max_message_height = self.MAX_HEIGHT - self.MESSAGE_VERTICAL_OVERHEAD
+        message_height = min(max_message_height, max(40, bounds.height() + 4))
         self.message.setFixedHeight(message_height)
-        target_height = min(self.maximumHeight(), max(100, 76 + message_height))
-        self.resize(max(380, self.width()), target_height)
+        target_height = min(
+            self.MAX_HEIGHT,
+            max(self.MIN_HEIGHT, self.MESSAGE_VERTICAL_OVERHEAD + message_height),
+        )
+        self.resize(target_width, target_height)
 
     def _move_to_bottom_right(self) -> None:
         screen = QApplication.primaryScreen()

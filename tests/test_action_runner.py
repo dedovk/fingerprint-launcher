@@ -146,3 +146,22 @@ def test_runner_passes_command_identity_to_timer_scheduler():
     assert scheduled[0]["command_id"] == 42
     assert scheduled[0]["finger_id"] == 5
     assert scheduled[0]["finger_label"] == "Index"
+
+
+def test_runner_preserves_shared_execution_metadata():
+    captured = []
+
+    def executor(_command, context):
+        captured.append(dict(context.command_metadata))
+
+    ActionRunner(
+        executor=executor,
+        metadata={"target_window_handle": 1234},
+    ).run([_command("sleep")])
+
+    assert captured == [{
+        "target_window_handle": 1234,
+        "command_id": None,
+        "finger_id": None,
+        "finger_label": "",
+    }]

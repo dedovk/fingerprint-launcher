@@ -21,6 +21,9 @@ def test_registry_contains_all_existing_actions_in_original_order():
         "shell",
         "lock_screen",
         "minimize_all",
+        "toggle_mute",
+        "change_volume",
+        "close_active_window",
         "shutdown",
         "restart",
         "sleep",
@@ -52,6 +55,33 @@ def test_delay_and_timer_validate_and_format_normalized_durations():
         "quick_timer",
         {"duration_ms": 7_200_000, "message": "Tea"},
     ) == "2 h - Tea"
+
+
+def test_volume_change_validates_and_formats_direction():
+    assert validate_command_data(
+        "change_volume", {"direction": "increase", "amount_percent": 15}
+    )["amount_percent"] == 15
+    assert format_action_summary(
+        "change_volume", {"direction": "increase", "amount_percent": 15}
+    ) == "+15%"
+    assert format_action_summary(
+        "change_volume", {"direction": "decrease", "amount_percent": 20}
+    ) == "-20%"
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"direction": "invalid", "amount_percent": 10},
+        {"direction": "increase", "amount_percent": 0},
+        {"direction": "decrease", "amount_percent": 101},
+        {"direction": "increase", "amount_percent": True},
+        {"direction": "increase", "amount_percent": 1.5},
+    ],
+)
+def test_volume_change_rejects_invalid_data(data):
+    with pytest.raises(ActionValidationError):
+        validate_command_data("change_volume", data)
 
 
 @pytest.mark.parametrize("command_type", ["delay", "quick_timer"])
@@ -106,3 +136,20 @@ def test_new_system_actions_are_translated(language, restart, minimize_all):
     labels = action_labels(language)
     assert labels["restart"] == restart
     assert labels["minimize_all"] == minimize_all
+
+
+def test_audio_and_window_actions_are_translated_in_all_languages():
+    expected = {
+        "uk": ("Вимкнути/увімкнути звук", "Змінити гучність", "Закрити активне вікно"),
+        "en": ("Mute/unmute sound", "Change volume", "Close active window"),
+        "ru": ("Выключить/включить звук", "Изменить громкость", "Закрыть активное окно"),
+        "fr": ("Couper/rétablir le son", "Modifier le volume", "Fermer la fenêtre active"),
+        "es": ("Silenciar/activar sonido", "Cambiar volumen", "Cerrar ventana activa"),
+    }
+    for language, labels_expected in expected.items():
+        labels = action_labels(language)
+        assert (
+            labels["toggle_mute"],
+            labels["change_volume"],
+            labels["close_active_window"],
+        ) == labels_expected

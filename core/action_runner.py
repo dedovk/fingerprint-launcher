@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from enum import Enum
 from time import perf_counter
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 from core.action_registry import format_action_summary, validate_command_data
 from core.execution import CancellationToken, CommandCancelledError, ExecutionContext, TimerScheduler
@@ -77,12 +77,14 @@ class ActionRunner:
         executor: Executor | None = None,
         on_result: ResultCallback | None = None,
         timer_scheduler: TimerScheduler | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> None:
         self.error_policy = error_policy
         self.token = token or CancellationToken()
         self.context = ExecutionContext(self.token, timer_scheduler=timer_scheduler)
         self.executor = executor or _default_executor
         self.on_result = on_result
+        self.metadata = dict(metadata or {})
 
     def cancel(self) -> None:
         self.token.cancel()
@@ -115,6 +117,7 @@ class ActionRunner:
             try:
                 data = validate_command_data(command_type, command.get("command_data"))
                 self.context.command_metadata = {
+                    **self.metadata,
                     "command_id": command.get("id"),
                     "finger_id": command.get("finger_id"),
                     "finger_label": command.get("label", ""),

@@ -45,11 +45,13 @@ class TriggeredFingerprintScan(QObject):
         db_path: str | Path,
         lang: str = "uk",
         timer_scheduler: Callable[[dict], None] | None = None,
+        target_window_handle: int = 0,
     ) -> None:
         super().__init__()
         self.db_path = Path(db_path)
         self.lang = lang
         self.timer_scheduler = timer_scheduler
+        self.target_window_handle = int(target_window_handle)
         self._session: WinBioSession | None = None
         self._runner: ActionRunner | None = None
         self._cancelled = False
@@ -162,9 +164,10 @@ class TriggeredFingerprintScan(QObject):
         self.matched.emit(finger_name)
 
         self._runner = ActionRunner(
-            error_policy=ErrorPolicy.CONTINUE,
+            error_policy=ErrorPolicy.STOP,
             on_result=self._emit_action_result,
             timer_scheduler=self.timer_scheduler,
+            metadata={"target_window_handle": self.target_window_handle},
         )
         report = self._runner.run(commands)
         self._runner = None
@@ -180,11 +183,11 @@ class TriggeredFingerprintScan(QObject):
                     failed_result.command_type,
                     failed_result.error or failed_result.message,
                 )
-            self.error.emit("; ".join(
+            failed_result = failed[0]
+            self.error.emit(
                 f"{tr(self.lang, 'action_result_failed')}: "
-                f"{labels.get(result.command_type, result.command_type)}"
-                for result in failed
-            ))
+                f"{labels.get(failed_result.command_type, failed_result.command_type)}"
+            )
             return
 
         details = self._format_action_details(commands)

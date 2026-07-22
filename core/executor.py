@@ -9,9 +9,11 @@ import subprocess
 import sys
 import webbrowser
 from typing import Any, Callable
+from urllib.parse import quote_plus, urlsplit
 
 from core.action_registry import ActionRegistryError, validate_command_data
 from core.execution import ExecutionContext
+from core import windows_audio
 
 
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000 if os.name == "nt" else 0)
@@ -76,10 +78,29 @@ def _launch_app(data: dict[str, Any]) -> None:
 
 
 def _open_url(data: dict[str, Any]) -> None:
-    url = str(data.get("url") or "").strip()
-    if not url:
+    value = str(data.get("url") or "").strip()
+    if not value:
         raise CommandExecutionError("open_url requires url")
+    url = _normalize_url_or_search(value)
+    if sys.platform == "win32":
+        os.startfile(url)
+        return
     webbrowser.open(url)
+
+
+def _normalize_url_or_search(value: str) -> str:
+    candidate = value.strip()
+    parsed = urlsplit(candidate)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return candidate
+
+    if " " not in candidate and "." in candidate:
+        normalized = f"https://{candidate}"
+        parsed = urlsplit(normalized)
+        if parsed.netloc:
+            return normalized
+
+    return f"https://www.google.com/search?q={quote_plus(candidate)}"
 
 
 def _hotkey(data: dict[str, Any]) -> None:
@@ -140,13 +161,70 @@ def _restart_handler(_data: dict[str, Any]) -> None:
 def _minimize_all() -> None:
     if sys.platform != "win32":
         raise CommandExecutionError("minimize_all is only available on Windows")
-    import keyboard
 
-    keyboard.send("windows+m")
+    user32 = ctypes.windll.user32
+    shell_window = int(user32.GetShellWindow() or 0)
+    enum_callback_type = ctypes.WINFUNCTYPE(
+        ctypes.c_bool,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+    )
+
+    def minimize_window(hwnd: int, _lparam: int) -> bool:
+        handle = int(hwnd or 0)
+        if (
+            handle
+            and handle != shell_window
+            and user32.IsWindowVisible(handle)
+            and not user32.GetWindow(handle, 4)  # GW_OWNER
+            and user32.GetWindowTextLengthW(handle) > 0
+        ):
+            user32.ShowWindow(handle, 6)  # SW_MINIMIZE
+        return True
+
+    callback = enum_callback_type(minimize_window)
+    if not user32.EnumWindows(callback, 0):
+        raise CommandExecutionError("Failed to enumerate windows")
 
 
 def _minimize_all_handler(_data: dict[str, Any]) -> None:
     _minimize_all()
+
+
+def _toggle_mute(_data: dict[str, Any]) -> None:
+    if sys.platform != "win32":
+        raise CommandExecutionError("toggle_mute is only available on Windows")
+    try:
+        windows_audio.toggle_mute()
+    except windows_audio.WindowsAudioError as exc:
+        raise CommandExecutionError(str(exc)) from exc
+
+
+def _change_volume(data: dict[str, Any]) -> None:
+    if sys.platform != "win32":
+        raise CommandExecutionError("change_volume is only available on Windows")
+    amount = int(data["amount_percent"])
+    delta = amount if data["direction"] == "increase" else -amount
+    try:
+        windows_audio.change_volume(delta)
+    except windows_audio.WindowsAudioError as exc:
+        raise CommandExecutionError(str(exc)) from exc
+
+
+def _close_active_window(
+    _data: dict[str, Any], context: ExecutionContext
+) -> None:
+    if sys.platform != "win32":
+        raise CommandExecutionError("close_active_window is only available on Windows")
+    context.check_cancelled()
+    user32 = ctypes.windll.user32
+    target = int(context.command_metadata.get("target_window_handle") or 0)
+    if not target:
+        target = int(user32.GetForegroundWindow() or 0)
+    if not target or not user32.IsWindow(target):
+        raise CommandExecutionError("No active window is available to close")
+    if not user32.PostMessageW(target, 0x0010, 0, 0):
+        raise CommandExecutionError("Unable to close the active window")
 
 
 def _sleep() -> None:
@@ -245,6 +323,9 @@ ACTION_HANDLERS = {
     "shell": _cancellable(_shell),
     "lock_screen": _cancellable(_lock_screen_handler),
     "minimize_all": _cancellable(_minimize_all_handler),
+    "toggle_mute": _cancellable(_toggle_mute),
+    "change_volume": _cancellable(_change_volume),
+    "close_active_window": _close_active_window,
     "shutdown": _cancellable(_shutdown_handler),
     "restart": _cancellable(_restart_handler),
     "sleep": _cancellable(_sleep_handler),

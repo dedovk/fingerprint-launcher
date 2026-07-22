@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core.action_runner import ActionStatus
+from core.action_runner import ActionStatus, ErrorPolicy
 from core.winbio import S_OK, WINBIO_E_BAD_CAPTURE
 from ui.i18n import (
     BIOMETRIC_TRANSLATIONS,
@@ -60,6 +60,12 @@ def test_dynamic_settings_messages_are_translated_for_every_language():
         "timeout",
         "delay",
         "quick_timer",
+        "toggle_mute",
+        "change_volume",
+        "close_active_window",
+        "volume_amount",
+        "volume_increase",
+        "volume_decrease",
         "pause_hotkey",
         "resume_hotkey",
         "hotkey_paused",
@@ -85,6 +91,7 @@ def test_tray_settings_label_has_no_ellipsis_in_any_language():
 
 def test_triggered_scan_emits_match_before_running_actions(tmp_path):
     events = []
+    runner_options = {}
 
     class MatchDatabase:
         def update_guid(self, *_args):
@@ -94,8 +101,8 @@ def test_triggered_scan_emits_match_before_running_actions(tmp_path):
             return [{"command_type": "lock_screen", "command_data": {}}]
 
     class RecordingRunner:
-        def __init__(self, **_kwargs):
-            pass
+        def __init__(self, **kwargs):
+            runner_options.update(kwargs)
 
         def run(self, _commands):
             events.append("runner")
@@ -115,6 +122,7 @@ def test_triggered_scan_emits_match_before_running_actions(tmp_path):
         worker._dispatch_match(MatchDatabase(), result)
 
     assert events == ["matched", "runner"]
+    assert runner_options["error_policy"] == ErrorPolicy.STOP
 
 
 def test_triggered_scan_localizes_system_finger_name(tmp_path):

@@ -71,6 +71,17 @@ def _validate_quick_timer(data: dict[str, Any]) -> None:
         raise ActionValidationError("sound_path must be a string")
 
 
+def _validate_volume_change(data: dict[str, Any]) -> None:
+    direction = data.get("direction")
+    if direction not in {"increase", "decrease"}:
+        raise ActionValidationError("direction must be increase or decrease")
+    amount = data.get("amount_percent")
+    if isinstance(amount, bool) or not isinstance(amount, int):
+        raise ActionValidationError("amount_percent must be an integer")
+    if not 1 <= amount <= 100:
+        raise ActionValidationError("amount_percent must be between 1 and 100")
+
+
 def _duration_summary(data: dict[str, Any], fallback: str) -> str:
     duration_ms = data.get("duration_ms")
     if isinstance(duration_ms, int) and not isinstance(duration_ms, bool):
@@ -82,6 +93,15 @@ def _timer_summary(data: dict[str, Any], fallback: str) -> str:
     duration = _duration_summary(data, fallback)
     message = str(data.get("message") or "").strip()
     return f"{duration} - {message}" if message else duration
+
+
+def _volume_summary(data: dict[str, Any], fallback: str) -> str:
+    amount = data.get("amount_percent")
+    direction = data.get("direction")
+    if isinstance(amount, int) and not isinstance(amount, bool):
+        prefix = "+" if direction == "increase" else "-"
+        return f"{prefix}{amount}%"
+    return fallback
 
 
 @dataclass(frozen=True)
@@ -201,6 +221,39 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
             "свернуть", "все", "окна", "рабочий стол",
             "réduire", "toutes", "fenêtres", "bureau",
             "minimizar", "todas", "ventanas", "escritorio",
+        ),
+    ),
+    ActionDefinition(
+        "toggle_mute", "toggle_mute", "system",
+        keywords=(
+            "mute", "unmute", "toggle", "sound", "audio",
+            "звук", "вимкнути", "увімкнути", "тиша",
+            "звук", "выключить", "включить", "без звука",
+            "son", "couper", "rétablir", "muet",
+            "sonido", "silenciar", "activar", "audio",
+        ),
+    ),
+    ActionDefinition(
+        "change_volume", "change_volume", "system", editor="volume",
+        defaults={"direction": "increase", "amount_percent": 10},
+        keywords=(
+            "volume", "sound", "audio", "increase", "decrease", "percent",
+            "гучність", "звук", "збільшити", "зменшити", "відсоток",
+            "громкость", "увеличить", "уменьшить", "процент",
+            "volume", "augmenter", "diminuer", "pourcentage",
+            "volumen", "subir", "bajar", "porcentaje",
+        ),
+        validator=_validate_volume_change,
+        summary_formatter=_volume_summary,
+    ),
+    ActionDefinition(
+        "close_active_window", "close_active_window", "system",
+        keywords=(
+            "close", "active", "window", "alt f4",
+            "закрити", "активне", "вікно",
+            "закрыть", "активное", "окно",
+            "fermer", "fenêtre", "active",
+            "cerrar", "ventana", "activa",
         ),
     ),
     ActionDefinition(

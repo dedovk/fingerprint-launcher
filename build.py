@@ -19,6 +19,7 @@ BASE_CMD = [
     "--file-version=1.0.0.0",
     "--product-version=1.0.0.0",
     "--enable-plugin=pyqt6",
+    "--include-module=PyQt6.QtMultimedia",
     "--include-data-dir=assets=assets",
     "--output-dir=dist",
 ]

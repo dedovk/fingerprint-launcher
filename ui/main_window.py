@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 from PyQt6.QtCore import QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, QObject, QRect, QRectF, QSize, Qt, QThread, QTimer, QUrl, QVariantAnimation, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QBrush, QColor, QDesktopServices, QFont, QPainter, QPalette, QPen
+from PyQt6.QtGui import QBrush, QColor, QDesktopServices, QFont, QLinearGradient, QPainter, QPalette, QPen
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -49,6 +49,7 @@ from ui.theme import (
     configure_theme,
     icon,
     prepare_combo_popup,
+    vertical_scrollbar_qss,
 )
 from ui.triggered_scan import TriggeredFingerprintScan
 from core.time_utils import format_countdown, format_duration_ms
@@ -259,7 +260,7 @@ class TabbedContent(QWidget):
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
         tab_height = 34
-        stack_top = tab_height - self.OVERLAP
+        stack_top = tab_height if THEME.is_gradient else tab_height - self.OVERLAP
         self.tab_bar.setGeometry(0, 0, self.width(), tab_height)
         self.stack.setGeometry(0, stack_top, self.width(), max(0, self.height() - stack_top))
         self.stack.raise_()
@@ -268,9 +269,10 @@ class TabbedContent(QWidget):
 class ThemeSwatch(QWidget):
     clicked = pyqtSignal()
 
-    def __init__(self, color: str, active: bool = False) -> None:
+    def __init__(self, color: str | tuple[str, str], active: bool = False) -> None:
         super().__init__()
-        self._color = QColor(color)
+        self._gradient_colors = color if isinstance(color, tuple) else None
+        self._color = QColor(color[0] if isinstance(color, tuple) else color)
         self._diameter = 38 if active else 34
         self._active = active
         self.setFixedSize(42, 42)
@@ -307,7 +309,13 @@ class ThemeSwatch(QWidget):
         painter.setBrush(QColor(0, 0, 0, 70))
         painter.drawEllipse(shadow_rect)
 
-        painter.setBrush(self._color)
+        if self._gradient_colors is not None:
+            gradient = QLinearGradient(x, y, x + diameter, y + diameter)
+            gradient.setColorAt(0.0, QColor(self._gradient_colors[0]))
+            gradient.setColorAt(1.0, QColor(self._gradient_colors[1]))
+            painter.setBrush(QBrush(gradient))
+        else:
+            painter.setBrush(self._color)
         outline = self._outline_color()
         painter.setPen(
             QPen(outline, 2 if self._active else 1)
@@ -377,22 +385,20 @@ def _button(text: str, kind: str, icon_name: str | None = None) -> QPushButton:
 class SelectionRowDelegate(QStyledItemDelegate):
     @staticmethod
     def _paint_selected_chrome(painter, option, index, last_column: int) -> None:
-        rect = option.rect.adjusted(0, 0, -1, -1)
+        rect = option.rect
         painter.save()
+        painter.setPen(QPen(QColor(THEME.border_focus), 1))
+        painter.drawLine(rect.topLeft(), rect.topRight())
+        painter.drawLine(rect.left(), rect.bottom() - 1, rect.right(), rect.bottom() - 1)
         if index.column() == 0:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(THEME.primary))
             painter.drawRect(rect.left(), rect.top() + 1, 3, max(1, rect.height() - 1))
-        if index.column() < last_column:
-            painter.setPen(QPen(QColor(THEME.border), 1))
-            painter.drawLine(
-                rect.right(), rect.top() + 12,
-                rect.right(), rect.bottom() - 12,
-            )
-
+            painter.setPen(QPen(QColor(THEME.border_focus), 1))
+            painter.drawLine(rect.topLeft(), rect.bottomLeft())
         if index.column() == last_column:
             painter.setPen(QPen(QColor(THEME.border_focus), 1))
-            painter.drawLine(rect.topRight(), rect.bottomRight())
+            painter.drawLine(rect.right() - 1, rect.top(), rect.right() - 1, rect.bottom())
         painter.restore()
 
     def paint(self, painter, option, index) -> None:  # type: ignore[override]
@@ -404,7 +410,8 @@ class SelectionRowDelegate(QStyledItemDelegate):
             painter.fillRect(opt.rect, QColor(THEME.selected_bg))
             opt.backgroundBrush = QBrush(QColor(THEME.selected_bg))
         else:
-            painter.fillRect(opt.rect, QColor(THEME.bg))
+            if not THEME.is_gradient:
+                painter.fillRect(opt.rect, QColor(THEME.bg))
         painter.restore()
         opt.state &= ~QStyle.StateFlag.State_Selected
         if selected and index.column() == 2:
@@ -425,7 +432,8 @@ class ActivityDelegate(SelectionRowDelegate):
         if selected:
             painter.fillRect(opt.rect, QColor(THEME.selected_bg))
         else:
-            painter.fillRect(opt.rect, QColor(THEME.bg))
+            if not THEME.is_gradient:
+                painter.fillRect(opt.rect, QColor(THEME.bg))
         icon_size = 14
         icon_rect = opt.rect.adjusted(20, 0, 0, 0)
         icon_rect.setWidth(icon_size)
@@ -538,6 +546,8 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(app_qss())
 
         root = QWidget()
+        root.setProperty("role", "canvas")
+        root.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         root_layout = QVBoxLayout(root)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
@@ -547,7 +557,7 @@ class MainWindow(QMainWindow):
         self.tab_bar = QFrame()
         self.tab_bar.setProperty("role", "tabBar")
         tab_layout = QHBoxLayout(self.tab_bar)
-        tab_layout.setContentsMargins(20, 0, 0, 0)
+        tab_layout.setContentsMargins(0, 0, 0, 0)
         tab_layout.setSpacing(0)
         self.tab_buttons = [AnimatedTabButton(""), AnimatedTabButton(""), AnimatedTabButton("")]
         for index, tab in enumerate(self.tab_buttons):
@@ -555,10 +565,12 @@ class MainWindow(QMainWindow):
             tab_layout.addWidget(tab)
         tab_layout.addStretch()
         self.stack = QStackedWidget()
+        self.stack.setProperty("role", "canvasStack")
         self.stack.addWidget(self._fingers_tab())
         self.stack.addWidget(self._status_tab())
         self.stack.addWidget(self._settings_tab())
         self.tabbed_content = TabbedContent(self.tab_bar, self.stack)
+        self.tabbed_content.setProperty("role", "canvasContainer")
         root_layout.addWidget(self.tabbed_content, 1)
         self.setCentralWidget(root)
         self._resize_handles = self._create_resize_handles()
@@ -683,6 +695,7 @@ class MainWindow(QMainWindow):
 
     def _fingers_tab(self) -> QWidget:
         page = QWidget()
+        page.setProperty("role", "canvasPage")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -695,13 +708,14 @@ class MainWindow(QMainWindow):
         self.fingers_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.fingers_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.fingers_table.setSortingEnabled(False)
+        self.fingers_table.verticalScrollBar().setStyleSheet(vertical_scrollbar_qss())
         self.fingers_table.horizontalHeader().setFixedHeight(37)
         self.fingers_table.horizontalHeader().setSectionsMovable(False)
         self.fingers_table.horizontalHeader().setCascadingSectionResizes(False)
         self.fingers_table.horizontalHeader().setMinimumSectionSize(44)
         self.fingers_table.setColumnWidth(0, 48)
-        self.fingers_table.setColumnWidth(1, 208)
-        self.fingers_table.setColumnWidth(2, 170)
+        self.fingers_table.setColumnWidth(1, 160)
+        self.fingers_table.setColumnWidth(2, 180)
         self.fingers_table.setColumnWidth(4, 126)
         self.fingers_table.horizontalHeader().setStretchLastSection(False)
         self.fingers_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
@@ -738,6 +752,7 @@ class MainWindow(QMainWindow):
 
     def _status_tab(self) -> QWidget:
         page = QWidget()
+        page.setProperty("role", "canvasPage")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(20, 0, 20, 20)
         layout.setSpacing(16)
@@ -803,10 +818,12 @@ class MainWindow(QMainWindow):
 
     def _settings_tab(self) -> QWidget:
         page = QWidget()
+        page.setProperty("role", "canvasPage")
         outer_layout = QVBoxLayout(page)
         outer_layout.setContentsMargins(20, 0, 20, 20)
         outer_layout.setSpacing(23)
         content = QWidget()
+        content.setProperty("role", "canvasContainer")
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(23)
@@ -909,7 +926,7 @@ class MainWindow(QMainWindow):
             ("graphite", "#323338", "theme_graphite"),
             ("dark", "#121A2F", "theme_dark"),
             ("purple_gradient", "#2A123E", "theme_purple"),
-            ("blue_gradient", "#132B65", "theme_blue"),
+            ("blue_gradient", ("#0B1120", "#1E3A8A"), "theme_blue"),
         ]:
             swatch = ThemeSwatch(color, key == current_theme)
             swatch.setToolTip(tr(self.lang, name_key))
@@ -963,6 +980,7 @@ class MainWindow(QMainWindow):
         support_head.setContentsMargins(20, 0, 20, 0)
         support_head.setSpacing(10)
         self.support_icon = QLabel()
+        self.support_icon.setFixedSize(28, 28)
         self.support_icon.setPixmap(icon("support").pixmap(28, 28))
         self.support_title = QLabel()
         self.support_title.setProperty("role", "sectionTitle")
@@ -1406,6 +1424,7 @@ class MainWindow(QMainWindow):
             if self.scan_thread.isRunning():
                 return
             self._scan_thread_finished(self.scan_thread, self.scan_worker)
+        target_window_handle = int(ctypes.windll.user32.GetForegroundWindow() or 0)
         self._scan_had_action_results = False
         self.scan_prompt.show_prompt(self.lang)
         self.last_activity.setText(tr(self.lang, "scan_popup_waiting"))
@@ -1415,6 +1434,7 @@ class MainWindow(QMainWindow):
             self.db.path,
             self.lang,
             timer_scheduler=self.timer_manager.request_timer,
+            target_window_handle=target_window_handle,
         )
         self.scan_thread = thread
         self.scan_worker = worker
@@ -1640,11 +1660,13 @@ class MainWindow(QMainWindow):
         if app is not None:
             app.setStyleSheet(style)
         self.setStyleSheet(style)
+        self.fingers_table.verticalScrollBar().setStyleSheet(vertical_scrollbar_qss())
         self.title_bar.refresh_icons()
         for button in self.findChildren(QPushButton):
             icon_name = button.property("iconName")
             if icon_name:
                 button.setIcon(icon(str(icon_name)))
+        self.support_icon.setFixedSize(28, 28)
         self.support_icon.setPixmap(icon("support").pixmap(28, 28))
         self.monobank_btn.setIcon(icon("mono_button"))
         self.hotkey_chip.setStyleSheet(self._hotkey_chip_style())

@@ -60,7 +60,14 @@ from ui.i18n import (
     localized_winbio_message,
     tr,
 )
-from ui.theme import THEME, StableComboBox, app_qss, icon, prepare_combo_popup
+from ui.theme import (
+    THEME,
+    StableComboBox,
+    app_qss,
+    icon,
+    prepare_combo_popup,
+    vertical_scrollbar_qss,
+)
 
 
 DATA_FREE_ACTIONS = {
@@ -459,10 +466,13 @@ class FingerWizard(QDialog):
         layout.addWidget(self.title_bar)
 
         body = QWidget()
+        body.setProperty("role", "canvas")
+        body.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.body_layout = QVBoxLayout(body)
         self.body_layout.setContentsMargins(16, 26, 16, 25)
         self.body_layout.setSpacing(0)
         self.stack = WizardPageStack()
+        self.stack.setProperty("role", "canvasStack")
         self.stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         self.stack.setMinimumHeight(0)
         self.stack.setFixedHeight(self._stack_height_for_index(0))
@@ -476,6 +486,7 @@ class FingerWizard(QDialog):
         nav.setContentsMargins(0, 18, 0, 0)
         self.back_btn = _wizard_button(tr(lang, "back"), "ghost", "back")
         self.next_btn = _wizard_button(tr(lang, "next"), "dark", "next")
+        self.next_btn.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.back_btn.setFixedSize(96, 36)
         self.next_btn.setFixedSize(83, 36)
         self.back_btn.clicked.connect(self.prev_step)
@@ -493,6 +504,7 @@ class FingerWizard(QDialog):
 
     def _capture_step(self) -> QWidget:
         page = QWidget()
+        page.setProperty("role", "canvasPage")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -535,6 +547,7 @@ class FingerWizard(QDialog):
 
     def _actions_step(self) -> QWidget:
         page = QWidget()
+        page.setProperty("role", "canvasPage")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
@@ -578,8 +591,10 @@ class FingerWizard(QDialog):
         self.action_value_stack.addWidget(self.hotkey_value)
         self.duration_editor = self._duration_editor()
         self.timer_editor = self._timer_editor()
+        self.volume_editor = self._volume_editor()
         self.action_value_stack.addWidget(self.duration_editor)
         self.action_value_stack.addWidget(self.timer_editor)
+        self.action_value_stack.addWidget(self.volume_editor)
         self.action_value_stack.setFixedHeight(42)
 
         self.browse = _wizard_button(tr(self.lang, "choose_file"), "secondary")
@@ -617,6 +632,7 @@ class FingerWizard(QDialog):
         self.actions_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.actions_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.actions_scroll.setFixedHeight(148)
+        self.actions_scroll.verticalScrollBar().setStyleSheet(vertical_scrollbar_qss())
         self.actions_container = QWidget()
         self.actions_layout = QVBoxLayout(self.actions_container)
         self.actions_layout.setContentsMargins(0, 0, 8, 0)
@@ -720,8 +736,32 @@ class FingerWizard(QDialog):
         layout.addLayout(sound_row)
         return editor
 
+    def _volume_editor(self) -> QWidget:
+        editor = QWidget()
+        editor.setObjectName("volumeEditor")
+        editor.setStyleSheet(
+            "QWidget#volumeEditor { background: transparent; border: 0; }"
+        )
+        row = QHBoxLayout(editor)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+
+        self.volume_amount = QLineEdit("10")
+        self.volume_amount.setValidator(QIntValidator(1, 100, self.volume_amount))
+        self.volume_amount.setFixedHeight(42)
+        self.volume_direction = StableComboBox()
+        self.volume_direction.setFixedHeight(42)
+        prepare_combo_popup(self.volume_direction)
+        self.volume_direction.addItem(tr(self.lang, "volume_increase"), "increase")
+        self.volume_direction.addItem(tr(self.lang, "volume_decrease"), "decrease")
+
+        row.addWidget(self.volume_amount, 1)
+        row.addWidget(self.volume_direction, 1)
+        return editor
+
     def _done_step(self) -> QWidget:
         page = QWidget()
+        page.setProperty("role", "canvasPage")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -906,7 +946,7 @@ class FingerWizard(QDialog):
             value = HotkeyEdit.normalize_hotkey(
                 self.hotkey_value.text().strip())
             self.hotkey_value.setText(value)
-        elif action in {"delay", "quick_timer"}:
+        elif action in {"delay", "quick_timer", "change_volume"}:
             value = ""
         else:
             value = self.action_value.text().strip()
@@ -974,6 +1014,13 @@ class FingerWizard(QDialog):
             self.timer_message.setText(str(data.get("message") or ""))
             self.timer_sound.setText(str(data.get("sound_path") or ""))
             self.timer_value.setFocus()
+        elif command_type == "change_volume":
+            self.volume_amount.setText(str(data.get("amount_percent", 10)))
+            direction_index = self.volume_direction.findData(
+                str(data.get("direction", "increase"))
+            )
+            self.volume_direction.setCurrentIndex(max(0, direction_index))
+            self.volume_amount.setFocus()
         elif command_type == "hotkey":
             self.hotkey_value.setText(str(value))
             self.hotkey_value.setFocus()
@@ -1111,6 +1158,12 @@ class FingerWizard(QDialog):
                 "message": self.timer_message.text().strip(),
                 "sound_path": self.timer_sound.text().strip(),
             }
+        if action == "change_volume":
+            return {
+                "schema_version": 1,
+                "direction": str(self.volume_direction.currentData()),
+                "amount_percent": int(self.volume_amount.text() or "0"),
+            }
         return build_command_data(action, value)
 
     @staticmethod
@@ -1141,7 +1194,9 @@ class FingerWizard(QDialog):
     def _sync_action_fields(self) -> None:
         action = self._selected_action()
         definition = get_action_definition(action)
-        needs_data = definition.requires_value or definition.editor in {"duration", "timer"}
+        needs_data = definition.requires_value or definition.editor in {
+            "duration", "timer", "volume"
+        }
         browse_active = action == "launch_app"
         self.action_value_label.setVisible(needs_data and definition.editor != "timer")
         self.action_value_stack.setVisible(needs_data)
@@ -1174,6 +1229,10 @@ class FingerWizard(QDialog):
         elif definition.editor == "timer":
             self.action_value_stack.setCurrentIndex(3)
             self.timer_value.setFocus()
+        elif definition.editor == "volume":
+            self.action_value_label.setText(tr(self.lang, "volume_amount").upper())
+            self.action_value_stack.setCurrentIndex(4)
+            self.volume_amount.setFocus()
         else:
             self.action_value_label.setText(tr(self.lang, "data").upper())
             self.action_value_stack.setCurrentIndex(0)
@@ -1209,17 +1268,21 @@ class FingerWizard(QDialog):
 
     def _sync_nav(self) -> None:
         self._sync_window_size()
+        done_step = self.stack.currentIndex() == self.stack.count() - 1
         self.back_btn.setEnabled(
             self.stack.currentIndex() > 0
             and not (self.existing and self.stack.currentIndex() == 1)
         )
         self.next_btn.setEnabled(
             self.stack.currentIndex() != 0 or self.scanned)
-        self.next_btn.setText(tr(self.lang, "done") if self.stack.currentIndex(
-        ) == self.stack.count() - 1 else tr(self.lang, "next"))
-        minimum_width = 100 if self.stack.currentIndex() == self.stack.count() - 1 else 83
+        self.next_btn.setText(tr(self.lang, "done") if done_step else tr(self.lang, "next"))
+        self.next_btn.setLayoutDirection(
+            Qt.LayoutDirection.LeftToRight if done_step
+            else Qt.LayoutDirection.RightToLeft
+        )
+        minimum_width = 100 if done_step else 83
         self.next_btn.setFixedWidth(max(minimum_width, self.next_btn.sizeHint().width()))
-        if self.stack.currentIndex() == self.stack.count() - 1:
+        if done_step:
             next_icon = "done"
         elif not self.next_btn.isEnabled() and THEME.key != "light":
             next_icon = "inactive_next"
@@ -1227,6 +1290,6 @@ class FingerWizard(QDialog):
             next_icon = "next"
         self.next_btn.setProperty("iconName", next_icon)
         self.next_btn.setIcon(icon(next_icon))
-        self.next_btn.setProperty("kind", "primary" if self.stack.currentIndex() == self.stack.count() - 1 else "dark")
+        self.next_btn.setProperty("kind", "primary" if done_step else "dark")
         self.next_btn.style().unpolish(self.next_btn)
         self.next_btn.style().polish(self.next_btn)

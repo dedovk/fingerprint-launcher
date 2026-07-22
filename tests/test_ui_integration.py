@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import Qt, QThread, QTimer
+from PyQt6.QtCore import QSize, Qt, QThread, QTimer
 from PyQt6.QtGui import QIcon
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
@@ -114,6 +114,37 @@ def test_duration_editor_limits_follow_selected_units(tmp_path):
         assert wizard.delay_value.validator().top() == 24
         wizard.timer_unit.setCurrentIndex(wizard.timer_unit.findData("hours"))
         assert wizard.timer_value.validator().top() == 720
+        wizard.deleteLater()
+        app.processEvents()
+
+
+def test_wizard_builds_and_edits_volume_change_without_resizing(tmp_path):
+    app = _app()
+    with Database(tmp_path / "volume-wizard.sqlite3") as db:
+        wizard = FingerWizard(db, lang="en")
+        wizard.stack.setCurrentIndex(1)
+        wizard.action_type.setCurrentIndex(
+            wizard.action_type.findData("change_volume")
+        )
+        wizard.volume_amount.setText("25")
+        wizard.volume_direction.setCurrentIndex(
+            wizard.volume_direction.findData("decrease")
+        )
+        wizard._add_action()
+
+        assert wizard.actions == [{
+            "command_type": "change_volume",
+            "command_data": {
+                "schema_version": 1,
+                "direction": "decrease",
+                "amount_percent": 25,
+            },
+        }]
+        assert wizard.height() == 643
+
+        wizard._edit_action(0)
+        assert wizard.volume_amount.text() == "25"
+        assert wizard.volume_direction.currentData() == "decrease"
         wizard.deleteLater()
         app.processEvents()
 
@@ -257,6 +288,33 @@ def test_activity_toggle_disables_the_complete_finger_sequence(tmp_path):
             command["enabled"]
             for command in db.get_commands_by_finger_id(finger_id)
         )
+
+        window.scan_prompt.hide()
+        window.timer_notification.hide()
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_main_window_delete_removes_selected_finger_and_its_actions(tmp_path):
+    app = _app()
+    with Database(tmp_path / "main-delete.sqlite3") as db:
+        deleted_id = db.save_finger("guid-1", 3, "Delete me")
+        retained_id = db.save_finger("guid-2", 4, "Keep me")
+        db.save_command(deleted_id, "minimize_all", {})
+        db.save_command(deleted_id, "open_url", {"url": "https://example.com"})
+        db.save_command(retained_id, "lock_screen", {})
+        with patch("keyboard.add_hotkey", return_value=object()):
+            window = MainWindow(db)
+
+        window.fingers_table.selectRow(0)
+        window.delete_selected_finger()
+
+        assert db.get_commands_by_finger_id(deleted_id) == []
+        assert [finger["id"] for finger in db.list_fingers()] == [retained_id]
+        assert window.fingers_table.rowCount() == 1
+        assert window.fingers_table.item(0, 1).data(
+            Qt.ItemDataRole.UserRole
+        ) == retained_id
 
         window.scan_prompt.hide()
         window.timer_notification.hide()
@@ -509,6 +567,47 @@ def test_main_window_applies_graphite_theme_and_wizard_surfaces(tmp_path):
         assert wizard.done_card.property("role") == "doneCard"
         assert "#28292F" in wizard.styleSheet()
         assert "#3C3D46" in wizard.styleSheet()
+
+        wizard.deleteLater()
+        window.scan_prompt.hide()
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_main_window_applies_blue_gradient_theme_and_wizard_canvas(tmp_path):
+    app = _app()
+    with Database(tmp_path / "blue-gradient-main.sqlite3") as db:
+        db.set_setting("theme", "blue_gradient")
+        with patch("keyboard.add_hotkey", return_value=object()):
+            window = MainWindow(db)
+
+        assert window.theme_key == "blue_gradient"
+        assert THEME.key == "blue_gradient"
+        assert window._theme_buttons[5].diameter() == 38
+        assert window.centralWidget().property("role") == "canvas"
+        assert window.stack.property("role") == "canvasStack"
+        window.show()
+        app.processEvents()
+        assert window.stack.y() == window.tab_bar.height()
+        assert window.tab_bar.layout().contentsMargins().left() == 0
+        assert window.fingers_table.columnWidth(1) == 160
+        assert window.fingers_table.columnWidth(2) == 180
+        assert "qlineargradient" in window.styleSheet()
+        assert "#1E3A8A" in window.styleSheet()
+        assert "rgba(255,255,255,20)" in window.styleSheet()
+
+        wizard = FingerWizard(db, window, lang="en")
+        assert wizard.body_layout.parentWidget().property("role") == "canvas"
+        assert wizard.stack.property("role") == "canvasStack"
+        assert "#2563EB" in wizard.styleSheet()
+        assert "#1E40AF" in wizard.styleSheet()
+        assert wizard.next_btn.layoutDirection() == Qt.LayoutDirection.RightToLeft
+
+        wizard.stack.setCurrentIndex(wizard.stack.count() - 1)
+        wizard._sync_nav()
+        assert wizard.next_btn.layoutDirection() == Qt.LayoutDirection.LeftToRight
+        assert window.support_icon.size() == QSize(28, 28)
+        assert THEME.canvas_brush in window.scan_prompt.styleSheet()
 
         wizard.deleteLater()
         window.scan_prompt.hide()

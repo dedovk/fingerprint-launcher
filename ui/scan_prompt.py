@@ -29,6 +29,7 @@ class ScanPrompt(QWidget):
             | Qt.WindowType.CustomizeWindowHint,
         )
         self.lang = lang
+        self.setObjectName("scanPrompt")
         self.setWindowTitle("FingerprintLauncher")
         self.setMinimumSize(self.MIN_WIDTH, self.MIN_HEIGHT)
         self.setMaximumSize(self.MAX_WIDTH, self.MAX_HEIGHT)
@@ -68,10 +69,11 @@ class ScanPrompt(QWidget):
         self.set_waiting(lang)
 
     def apply_theme(self) -> None:
+        prompt_background = THEME.canvas_brush if THEME.is_gradient else THEME.surface
         self.setStyleSheet(
             f"""
-            QWidget {{
-                background: {THEME.surface};
+            QWidget#scanPrompt {{
+                background: {prompt_background};
                 color: {THEME.text};
                 border: 1px solid {THEME.border};
                 border-radius: 12px;

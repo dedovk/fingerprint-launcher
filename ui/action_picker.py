@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QEvent, QModelIndex, QPoint, QSize, QSortFilterProxyModel, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QStandardItem, QStandardItemModel
+from PyQt6.QtGui import QFont, QPainter, QPen, QStandardItem, QStandardItemModel
 from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
 
 from core.action_registry import ACTION_DEFINITIONS, ActionDefinition
 from ui.i18n import tr
-from ui.theme import THEME, icon
+from ui.theme import THEME, icon, qcolor
 
 
 ACTION_ID_ROLE = Qt.ItemDataRole.UserRole + 1
@@ -54,7 +54,7 @@ class _ActionPickerDelegate(QStyledItemDelegate):
         gap = 10
         margin = 12
 
-        line_color = QColor(THEME.border)
+        line_color = qcolor(THEME.border)
         line_color.setAlpha(180)
         painter.setPen(QPen(line_color, 1))
         if text_left - gap > option.rect.left() + margin:
@@ -62,7 +62,7 @@ class _ActionPickerDelegate(QStyledItemDelegate):
         if text_right + gap < option.rect.right() - margin:
             painter.drawLine(text_right + gap, line_y, option.rect.right() - margin, line_y)
 
-        painter.setPen(QColor(THEME.subtle))
+        painter.setPen(qcolor(THEME.subtle))
         painter.drawText(option.rect, Qt.AlignmentFlag.AlignCenter, text)
         painter.restore()
 
@@ -133,12 +133,12 @@ class ActionPicker(QWidget):
         self.popup.setStyleSheet(
             f"""
             QFrame#actionPickerPopup {{
-                background: {THEME.surface};
+                background: {THEME.popup_surface};
                 border: 1px solid {THEME.input_border};
                 border-radius: 10px;
             }}
             QLineEdit {{
-                background: {THEME.surface};
+                background: {THEME.popup_surface};
                 color: {THEME.text};
                 border: 1px solid {THEME.input_border};
                 border-radius: 8px;
@@ -146,7 +146,7 @@ class ActionPicker(QWidget):
                 padding: 0 10px;
             }}
             QListView {{
-                background: {THEME.surface};
+                background: {THEME.popup_surface};
                 color: {THEME.text};
                 border: 0;
                 outline: 0;
@@ -161,9 +161,13 @@ class ActionPicker(QWidget):
                 color: {THEME.text};
             }}
             QScrollBar:vertical {{
-                background: transparent;
+                background: {THEME.popup_surface};
                 width: 3px;
                 margin: 0;
+            }}
+            QScrollBar::groove:vertical {{
+                background: transparent;
+                border: 0;
             }}
             QScrollBar::handle:vertical {{
                 background: {THEME.scrollbar};
@@ -208,6 +212,33 @@ class ActionPicker(QWidget):
         self.list_view.setItemDelegate(_ActionPickerDelegate(self.list_view))
         self.list_view.setUniformItemSizes(False)
         self.list_view.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
+        self.list_view.verticalScrollBar().setStyleSheet(
+            f"""
+            QScrollBar:vertical {{
+                background: transparent;
+                border: 0;
+                width: 3px;
+                margin: 0;
+            }}
+            QScrollBar::groove:vertical {{
+                background: {THEME.popup_surface};
+                border: 0;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {THEME.scrollbar};
+                border: 0;
+                border-radius: 1px;
+                min-height: 32px;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical,
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                background: {THEME.popup_surface};
+                border: 0;
+                width: 0;
+                height: 0;
+            }}
+            """
+        )
         self.list_view.clicked.connect(self._activate_index)
         self.list_view.installEventFilter(self)
 
@@ -317,7 +348,7 @@ class ActionPicker(QWidget):
             header.setData(category, CATEGORY_ROLE)
             header.setData(True, HEADER_ROLE)
             header.setFlags(Qt.ItemFlag.NoItemFlags)
-            header.setForeground(QColor(THEME.muted))
+            header.setForeground(qcolor(THEME.muted))
             header_font = QFont()
             header_font.setPointSize(8)
             header_font.setWeight(QFont.Weight.DemiBold)

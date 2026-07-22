@@ -17,7 +17,7 @@ def test_picker_contains_all_actions_and_searches_keywords():
     app = _app()
     picker = ActionPicker("uk")
 
-    assert len(picker.filtered_action_ids()) == 12
+    assert len(picker.filtered_action_ids()) == 15
     picker.set_search_text("powershell")
     assert picker.filtered_action_ids() == ["shell"]
     picker.set_search_text("буфер")
@@ -30,6 +30,12 @@ def test_picker_contains_all_actions_and_searches_keywords():
     assert picker.filtered_action_ids() == ["restart"]
     picker.set_search_text("escritorio")
     assert picker.filtered_action_ids() == ["minimize_all"]
+    picker.set_search_text("гучність")
+    assert picker.filtered_action_ids() == ["change_volume"]
+    picker.set_search_text("muet")
+    assert picker.filtered_action_ids() == ["toggle_mute"]
+    picker.set_search_text("cerrar")
+    assert picker.filtered_action_ids() == ["close_active_window"]
     assert app is not None
 
 

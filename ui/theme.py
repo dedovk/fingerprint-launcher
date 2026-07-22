@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PyQt6.QtWidgets import QComboBox, QGraphicsOpacityEffect, QListView, QWidget
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QColor, QIcon
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,6 +59,11 @@ class ThemeSpec:
     trc_bg: str
     trc_text: str
     trc_border: str
+    canvas_brush: str | None = None
+    primary_brush: str | None = None
+    table_header_bg: str | None = None
+    popup_surface: str | None = None
+    scrollbar_track: str | None = None
 
 
 THEME_SPECS = {
@@ -133,6 +138,44 @@ THEME_SPECS = {
         warning_bg="#2C2D35", success_bg="#2C2D35", status_log_surface="#2C2D35",
         trc_bg="#464750", trc_text="#DFE0EA", trc_border="#4A4B55",
     ),
+    "blue_gradient": ThemeSpec(
+        key="blue_gradient", bg="#0B1120", surface="rgba(255,255,255,20)",
+        settings_surface="rgba(255,255,255,20)",
+        action_row_bg="rgba(255,255,255,20)",
+        action_button_bg="rgba(255,255,255,20)",
+        title_main="#060C1A", title_wizard="#060C1A",
+        wizard_capture_surface="rgba(255,255,255,20)",
+        wizard_done_surface="rgba(255,255,255,20)",
+        text="#E0E7FF", strong_text="#F5F5F5",
+        muted="rgba(224,231,255,128)", subtle="rgba(224,231,255,128)",
+        border="rgba(255,255,255,38)", input_border="rgba(255,255,255,38)",
+        settings_input_border="#95BFFF", border_focus="#1D74F7",
+        primary="#2563EB", primary_hover="#1D4ED8", primary_2="#1E40AF",
+        secondary="rgba(255,255,255,20)", secondary_text="#E0E7FF",
+        dark_button="rgba(255,255,255,20)",
+        disabled_bg="rgba(91,88,88,20)", disabled_text="rgba(255,255,255,77)",
+        success="#16A34A", danger="#FF0004", selected_bg="#C422376F",
+        selected_action_text="#60A5FA", scrollbar="#3A4B76",
+        tab_bar="transparent", tab_active="rgba(255,255,255,46)",
+        tab_active_text="#60A5FA", tab_inactive="rgba(255,255,255,15)",
+        tab_inactive_text="rgba(224,231,255,128)",
+        checkbox_bg="rgba(255,255,255,20)", checkbox_border="rgba(255,255,255,38)",
+        warning_bg="rgba(255,255,255,20)", success_bg="rgba(255,255,255,20)",
+        status_log_surface="rgba(255,255,255,20)",
+        trc_bg="rgba(255,255,255,20)", trc_text="#E0E7FF",
+        trc_border="rgba(255,255,255,38)",
+        canvas_brush=(
+            "qlineargradient(x1:0,y1:0,x2:1,y2:1,"
+            "stop:0 #0B1120,stop:1 #1E3A8A)"
+        ),
+        primary_brush=(
+            "qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            "stop:0 #2563EB,stop:1 #1E40AF)"
+        ),
+        table_header_bg="rgba(255,255,255,10)",
+        popup_surface="#263A6C",
+        scrollbar_track="#1E3A8A",
+    ),
 }
 
 
@@ -146,9 +189,62 @@ class Theme:
     def apply(self, spec: ThemeSpec) -> None:
         for name, value in spec.__dict__.items():
             setattr(self, name, value)
+        self.canvas_brush = spec.canvas_brush or spec.bg
+        self.primary_brush = spec.primary_brush or spec.primary
+        self.table_header_bg = spec.table_header_bg or spec.bg
+        self.popup_surface = spec.popup_surface or spec.surface
+        self.scrollbar_track = spec.scrollbar_track or "transparent"
+        self.is_gradient = spec.canvas_brush is not None
 
 
 THEME = Theme()
+
+
+def qcolor(value: str) -> QColor:
+    """Convert both Qt hex colors and QSS rgba() values for custom painters."""
+    color = QColor(value)
+    if color.isValid() or not value.startswith("rgba("):
+        return color
+    channels = [part.strip() for part in value[5:-1].split(",")]
+    if len(channels) != 4:
+        return color
+    try:
+        return QColor(*(int(channel) for channel in channels))
+    except ValueError:
+        return color
+
+
+def vertical_scrollbar_qss() -> str:
+    """Return a self-contained narrow scrollbar style for complex Qt views."""
+    return f"""
+        QScrollBar:vertical {{
+            background: {THEME.scrollbar_track};
+            border: 0;
+            width: 3px;
+            margin: 0;
+        }}
+        QScrollBar::groove:vertical,
+        QScrollBar::add-page:vertical,
+        QScrollBar::sub-page:vertical {{
+            background: {THEME.scrollbar_track};
+            border: 0;
+        }}
+        QScrollBar::handle:vertical {{
+            background: {THEME.scrollbar};
+            border: 0;
+            border-radius: 1px;
+            min-height: 36px;
+        }}
+        QScrollBar::add-line:vertical,
+        QScrollBar::sub-line:vertical,
+        QScrollBar::up-arrow:vertical,
+        QScrollBar::down-arrow:vertical {{
+            background: transparent;
+            border: 0;
+            width: 0;
+            height: 0;
+        }}
+    """
 
 
 def configure_theme(theme_key: str) -> bool:
@@ -161,7 +257,11 @@ def configure_theme(theme_key: str) -> bool:
 
 def icon_path(name: str, theme: str | None = None) -> str:
     theme_key = theme or THEME.key
-    themed_path = ASSETS_DIR / theme_key / f"{name}.svg"
+    asset_key = {
+        "blue_gradient": "blue",
+        "purple_gradient": "purple",
+    }.get(theme_key, theme_key)
+    themed_path = ASSETS_DIR / asset_key / f"{name}.svg"
     if themed_path.exists():
         return str(themed_path)
     return str(ASSETS_DIR / "light" / f"{name}.svg")
@@ -217,7 +317,14 @@ def app_qss() -> str:
             font-size: 14px;
         }}
         QMainWindow, QDialog {{
-            background: {t.bg};
+            background: {t.canvas_brush};
+        }}
+        QWidget[role="canvas"] {{
+            background: {t.canvas_brush};
+        }}
+        QWidget[role="canvasPage"], QWidget[role="canvasContainer"],
+        QStackedWidget[role="canvasStack"] {{
+            background: transparent;
         }}
         QLabel {{
             background: transparent;
@@ -264,7 +371,7 @@ def app_qss() -> str:
             margin-right: 12px;
         }}
         QComboBox QAbstractItemView {{
-            background: {t.surface};
+            background: {t.popup_surface};
             color: {t.text};
             border: 1px solid {t.input_border};
             border-radius: 8px;
@@ -276,7 +383,7 @@ def app_qss() -> str:
         QComboBox QAbstractItemView::item {{
             min-height: 28px;
             padding: 6px 10px;
-            background: {t.surface};
+            background: {t.popup_surface};
         }}
         QPushButton {{
             border-radius: 10px;
@@ -286,7 +393,7 @@ def app_qss() -> str:
             font-weight: 500;
         }}
         QPushButton[kind="primary"] {{
-            background: {t.primary};
+            background: {t.primary_brush};
             color: #ffffff;
             border: 1px solid {t.primary};
         }}
@@ -304,7 +411,7 @@ def app_qss() -> str:
             border: 1px solid {t.border};
         }}
         QPushButton[kind="ghost"] {{
-            background: {t.bg};
+            background: {"transparent" if t.is_gradient else t.bg};
             color: {t.muted};
             border: 0;
         }}
@@ -319,7 +426,7 @@ def app_qss() -> str:
             border: 1px solid {t.border};
         }}
         QPushButton[kind="ghost"]:disabled {{
-            background: {t.bg};
+            background: {"transparent" if t.is_gradient else t.bg};
             color: {t.muted};
             border: 0;
         }}
@@ -354,7 +461,7 @@ def app_qss() -> str:
             border-radius: 14px;
         }}
         QFrame[role="footer"] {{
-            background: {t.bg};
+            background: {"transparent" if t.is_gradient else t.bg};
             border-top: 1px solid {t.border};
         }}
         QFrame[role="tabBar"] {{
@@ -409,7 +516,7 @@ def app_qss() -> str:
             font-weight: 400;
         }}
         QTableWidget {{
-            background: {t.bg};
+            background: {"transparent" if t.is_gradient else t.bg};
             border: 0;
             gridline-color: {t.border};
             selection-background-color: {t.selected_bg};
@@ -427,9 +534,9 @@ def app_qss() -> str:
             border-bottom: 1px solid {t.border_focus};
         }}
         QHeaderView::section {{
-            background: {t.bg};
+            background: {t.table_header_bg};
             border: 0;
-            border-bottom: 1px solid {t.border};
+            border-bottom: {"0.8px" if t.is_gradient else "1px"} solid {t.border};
             padding-left: 20px;
         }}
         QScrollArea {{
@@ -440,9 +547,14 @@ def app_qss() -> str:
             background: transparent;
         }}
         QScrollBar:vertical {{
-            background: transparent;
+            background: {t.scrollbar_track};
+            border: 0;
             width: 3px;
             margin: 0;
+        }}
+        QScrollBar::groove:vertical {{
+            background: {t.scrollbar_track};
+            border: 0;
         }}
         QScrollBar::handle:vertical {{
             background: {t.scrollbar};
@@ -450,7 +562,7 @@ def app_qss() -> str:
             min-height: 36px;
         }}
         QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-            background: transparent;
+            background: {t.scrollbar_track};
             border: 0;
         }}
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
@@ -480,7 +592,7 @@ def app_qss() -> str:
         QCheckBox::indicator {{
             width: 16px;
             height: 16px;
-            border: 1.6px solid {t.checkbox_border};
+            border: 2px solid {t.checkbox_border};
             border-radius: 4px;
             background: {t.checkbox_bg};
         }}

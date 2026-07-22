@@ -2,7 +2,13 @@ from pathlib import Path
 
 from PyQt6.QtGui import QColor
 
-from ui.theme import THEME, configure_theme, icon_path
+from ui.theme import (
+    THEME,
+    configure_theme,
+    icon_path,
+    qcolor,
+    vertical_scrollbar_qss,
+)
 
 
 def test_dark_theme_uses_reference_tokens_and_dark_assets():
@@ -100,5 +106,51 @@ def test_graphite_theme_uses_reference_tokens_and_complete_assets():
             "inactive_next",
         ):
             assert Path(icon_path(icon_name)).parent.name == "graphite"
+    finally:
+        configure_theme("light")
+
+
+def test_blue_gradient_theme_uses_reference_tokens_and_complete_assets():
+    try:
+        assert configure_theme("blue_gradient")
+        assert THEME.bg == "#0B1120"
+        assert THEME.title_main == "#060C1A"
+        assert THEME.tab_active == "rgba(255,255,255,46)"
+        assert THEME.tab_active_text == "#60A5FA"
+        assert THEME.tab_inactive == "rgba(255,255,255,15)"
+        assert THEME.tab_inactive_text == "rgba(224,231,255,128)"
+        assert THEME.surface == "rgba(255,255,255,20)"
+        assert THEME.table_header_bg == "rgba(255,255,255,10)"
+        assert THEME.popup_surface == "#263A6C"
+        assert THEME.scrollbar == "#3A4B76"
+        assert THEME.scrollbar_track == "#1E3A8A"
+        scrollbar_style = vertical_scrollbar_qss()
+        assert "background: #1E3A8A" in scrollbar_style
+        assert "background: #3A4B76" in scrollbar_style
+        assert qcolor(THEME.muted).getRgb() == (224, 231, 255, 128)
+        assert THEME.settings_input_border == "#95BFFF"
+        assert THEME.selected_bg == "#C422376F"
+        assert QColor(THEME.selected_bg).getRgb() == (34, 55, 111, 196)
+        assert "#0B1120" in THEME.canvas_brush
+        assert "#1E3A8A" in THEME.canvas_brush
+        assert "#2563EB" in THEME.primary_brush
+        assert "#1E40AF" in THEME.primary_brush
+        assert THEME.is_gradient
+
+        for icon_name in (
+            "checkbox_checked",
+            "close_titlebar",
+            "close_wizard_fixed",
+            "check_version_white",
+            "mono_button",
+            "inactive_next",
+            "icon_scan",
+            "icon_done",
+        ):
+            assert Path(icon_path(icon_name)).parent.name == "blue"
+        support_svg = Path(icon_path("support")).read_text(encoding="utf-8")
+        assert 'width="28"' in support_svg
+        assert 'fill-opacity="0.08"' in support_svg
+        assert 'stroke="#E0E7FF"' in support_svg
     finally:
         configure_theme("light")

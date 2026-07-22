@@ -270,7 +270,7 @@ class Database:
             FROM fingers f
             JOIN commands c ON c.finger_id = f.id
             WHERE {where}
-            ORDER BY c.id ASC
+            ORDER BY f.id ASC, c.id ASC
             """,
             params,
         ).fetchall()
@@ -456,8 +456,14 @@ class Database:
         self._conn.commit()
 
     def delete_finger(self, finger_id: int) -> None:
-        self._conn.execute("DELETE FROM fingers WHERE id = ?", (finger_id,))
-        self._conn.commit()
+        # Keep this explicit as well as relying on ON DELETE CASCADE. Older
+        # databases may have been created without the expected FK constraint.
+        with self._conn:
+            self._conn.execute(
+                "DELETE FROM commands WHERE finger_id = ?",
+                (finger_id,),
+            )
+            self._conn.execute("DELETE FROM fingers WHERE id = ?", (finger_id,))
 
     def list_fingers(self) -> list[dict[str, Any]]:
         rows = self._conn.execute(

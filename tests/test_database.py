@@ -144,6 +144,28 @@ def test_complete_finger_sequence_can_be_toggled_atomically(tmp_path):
         assert len(db.get_commands("guid-1", 0x03)) == 2
 
 
+def test_matching_duplicate_finger_records_preserve_visible_sequence_order(tmp_path):
+    with Database(tmp_path / "ordered-sequences.sqlite3") as db:
+        first_finger = db.save_finger("guid-1", 0x03, "first")
+        second_finger = db.save_finger("guid-1", 0x03, "second")
+        db.save_command(first_finger, "delay", {"duration_ms": 100})
+        db.save_command(second_finger, "lock_screen", {})
+        db.save_command(first_finger, "open_url", {"url": "https://example.com"})
+
+        commands = db.get_commands("guid-1", 0x03)
+
+        assert [command["finger_id"] for command in commands] == [
+            first_finger,
+            first_finger,
+            second_finger,
+        ]
+        assert [command["command_type"] for command in commands] == [
+            "delay",
+            "open_url",
+            "lock_screen",
+        ]
+
+
 def test_replace_commands_removes_deleted_actions(tmp_path):
     with Database(tmp_path / "test.sqlite3") as db:
         finger_id = db.save_finger("guid-1", 0x03, "finger")
@@ -164,6 +186,23 @@ def test_replace_commands_removes_deleted_actions(tmp_path):
         assert len(commands) == 1
         assert commands[0]["command_type"] == "launch_app"
         assert commands[0]["command_data"]["path"] == "Code.exe"
+
+
+def test_delete_finger_removes_only_its_action_sequence(tmp_path):
+    with Database(tmp_path / "delete.sqlite3") as db:
+        deleted_id = db.save_finger("guid-1", 0x03, "deleted finger")
+        retained_id = db.save_finger("guid-2", 0x04, "retained finger")
+        db.save_command(deleted_id, "minimize_all", {})
+        db.save_command(deleted_id, "open_url", {"url": "https://example.com"})
+        db.save_command(retained_id, "lock_screen", {})
+
+        db.delete_finger(deleted_id)
+
+        assert db.get_commands_by_finger_id(deleted_id) == []
+        assert [finger["id"] for finger in db.list_fingers()] == [retained_id]
+        retained = db.get_commands_by_finger_id(retained_id)
+        assert len(retained) == 1
+        assert retained[0]["command_type"] == "lock_screen"
 
 
 def test_replace_commands_accepts_type_alias_and_bad_data(tmp_path):
